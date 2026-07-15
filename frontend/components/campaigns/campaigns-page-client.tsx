@@ -297,7 +297,7 @@ export function CampaignsPageClient() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="dashboard-panel flex flex-col gap-4 p-6 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="section-heading">Campaign registry</p>
           <h2 className="mt-2 text-3xl font-semibold text-slate-950">
@@ -315,13 +315,13 @@ export function CampaignsPageClient() {
       </div>
 
       {notice ? (
-        <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">
+        <div className="dashboard-inline-notice rounded-2xl px-4 py-3 text-sm text-teal-900">
           {notice}
         </div>
       ) : null}
 
-      <section className="grid gap-4 lg:grid-cols-[1fr_auto]">
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+      <section className="dashboard-panel grid gap-4 p-5 lg:grid-cols-[1fr_auto]">
+        <div className="dashboard-input-shell flex items-center gap-3 px-4 py-3">
           <Search className="size-4 text-slate-400" />
           <input
             className="w-full bg-transparent outline-none"
@@ -333,12 +333,12 @@ export function CampaignsPageClient() {
             }}
           />
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+        <div className="dashboard-muted-chip rounded-2xl px-4 py-3 text-sm text-slate-600">
           Bangladesh/Dhaka schedule timezone
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-[1.6rem] border border-slate-200 bg-white">
+      <section className="dashboard-panel overflow-hidden">
         {campaignsQuery.isLoading ? (
           <div className="p-5">
             <TableSkeleton />
@@ -430,7 +430,7 @@ export function CampaignsPageClient() {
         )}
       </section>
 
-      <div className="flex items-center justify-between gap-4">
+      <div className="dashboard-panel flex items-center justify-between gap-4 px-5 py-4">
         <p className="text-sm text-slate-600">
           Page {page} of {pageCount}
         </p>
@@ -635,7 +635,7 @@ export function CampaignsPageClient() {
             </div>
 
             <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-              <div className="rounded-[1.6rem] border border-slate-200 bg-slate-50 p-5">
+              <div className="dashboard-panel p-5">
                 <div className="grid gap-3 text-sm text-slate-600">
                   <div className="flex justify-between gap-4">
                     <span>Connect to</span>
@@ -734,7 +734,7 @@ export function CampaignsPageClient() {
                 </div>
               </div>
 
-              <div className="rounded-[1.6rem] border border-slate-200 bg-white p-5">
+              <div className="dashboard-panel p-5">
                 <p className="section-heading">Recent calls</p>
                 <div className="mt-4 space-y-3">
                   {callLogQuery.isLoading ? (

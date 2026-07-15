@@ -1,14 +1,7 @@
-import {
-  BarChart3,
-  ContactRound,
-  LayoutDashboard,
-  Music4,
-  PhoneCall,
-  Wallet,
-} from "lucide-react";
-import Link from "next/link";
+import { PhoneCall, Wallet } from "lucide-react";
 import { redirect } from "next/navigation";
 
+import { SidebarNav } from "@/components/app/sidebar-nav";
 import { LogoutButton } from "@/components/auth/logout-button";
 import { SessionBootstrap } from "@/components/session-bootstrap";
 import { fetchBackendJson } from "@/lib/server-api";
@@ -16,10 +9,10 @@ import { getStoredSession } from "@/lib/session";
 import { type SessionUser } from "@/stores/app-store";
 
 const navigation = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/campaigns", label: "Campaigns", icon: BarChart3 },
-  { href: "/contacts", label: "Contacts", icon: ContactRound },
-  { href: "/audio", label: "Campaign Audio", icon: Music4 },
+  { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
+  { href: "/campaigns", label: "Campaigns", icon: "campaigns" },
+  { href: "/contacts", label: "Contacts", icon: "contacts" },
+  { href: "/audio", label: "Campaign Audio", icon: "audio" },
 ];
 
 type MeResponse = {
@@ -90,23 +83,7 @@ export default async function AppLayout({
                 one operator workspace.
               </p>
             </div>
-
-            <nav className="space-y-2.5">
-              {navigation.map((item) => {
-                const Icon = item.icon;
-
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className="flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium text-white/82 transition hover:bg-white/14 hover:text-white"
-                  >
-                    <Icon className="size-4" />
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </nav>
+            <SidebarNav items={navigation} />
           </div>
 
           <div className="space-y-4 rounded-[1.8rem] border border-white/20 bg-white/10 p-5 backdrop-blur-sm">

@@ -117,7 +117,7 @@ export function CampaignAudioPageClient() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="dashboard-panel p-6">
         <p className="section-heading">Voice assets</p>
         <h2 className="mt-2 text-3xl font-semibold text-slate-950">
           Campaign audio management
@@ -129,13 +129,13 @@ export function CampaignAudioPageClient() {
       </div>
 
       {notice ? (
-        <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">
+        <div className="dashboard-inline-notice rounded-2xl px-4 py-3 text-sm text-teal-900">
           {notice}
         </div>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-        <section className="rounded-[1.6rem] border border-slate-200 bg-white p-5">
+        <section className="dashboard-panel p-5">
           <div className="flex items-center gap-3">
             <Music4 className="size-5 text-teal-700" />
             <div>
@@ -185,7 +185,7 @@ export function CampaignAudioPageClient() {
           </div>
         </section>
 
-        <section className="rounded-[1.6rem] border border-slate-200 bg-white p-5">
+        <section className="dashboard-panel p-5">
           <div className="flex items-center gap-3">
             <Waves className="size-5 text-amber-700" />
             <div>

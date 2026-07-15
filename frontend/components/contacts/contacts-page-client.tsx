@@ -234,7 +234,7 @@ export function ContactsPageClient({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="dashboard-panel flex flex-col gap-4 p-6 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="section-heading">Contact registry</p>
           <h2 className="mt-2 text-3xl font-semibold text-slate-950">
@@ -258,13 +258,13 @@ export function ContactsPageClient({
       </div>
 
       {notice ? (
-        <div className="rounded-2xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">
+        <div className="dashboard-inline-notice rounded-2xl px-4 py-3 text-sm text-teal-900">
           {notice}
         </div>
       ) : null}
 
-      <section className="grid gap-4 lg:grid-cols-4">
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 lg:col-span-2">
+      <section className="dashboard-panel grid gap-4 p-5 lg:grid-cols-4">
+        <div className="dashboard-input-shell flex items-center gap-3 px-4 py-3 lg:col-span-2">
           <Search className="size-4 text-slate-400" />
           <input
             className="w-full bg-transparent outline-none"
@@ -277,7 +277,7 @@ export function ContactsPageClient({
           />
         </div>
         <input
-          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none"
+          className="dashboard-input-shell rounded-2xl px-4 py-3 outline-none"
           placeholder="Filter by contact name"
           value={filters.name}
           onChange={(event) => {
@@ -286,7 +286,7 @@ export function ContactsPageClient({
           }}
         />
         <input
-          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none"
+          className="dashboard-input-shell rounded-2xl px-4 py-3 outline-none"
           placeholder="Filter by phone"
           value={filters.phoneNumber}
           onChange={(event) => {
@@ -296,9 +296,9 @@ export function ContactsPageClient({
         />
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-[1fr_auto]">
+      <section className="dashboard-panel grid gap-4 p-5 lg:grid-cols-[1fr_auto]">
         <select
-          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none"
+          className="dashboard-input-shell rounded-2xl px-4 py-3 outline-none"
           value={filters.campaignId}
           onChange={(event) => {
             setContactFilters({ campaignId: event.target.value });
@@ -313,7 +313,7 @@ export function ContactsPageClient({
           ))}
         </select>
         <a
-          className="inline-flex items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-teal-200 hover:text-teal-900"
+          className="dashboard-muted-chip inline-flex items-center justify-center rounded-2xl px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-teal-200 hover:text-teal-900"
           download
           href="/contact-import-template.csv"
         >
@@ -321,7 +321,7 @@ export function ContactsPageClient({
         </a>
       </section>
 
-      <section className="overflow-hidden rounded-[1.6rem] border border-slate-200 bg-white">
+      <section className="dashboard-panel overflow-hidden">
         {contactsQuery.isLoading ? (
           <div className="p-5">
             <ContactSkeleton />
@@ -391,7 +391,7 @@ export function ContactsPageClient({
         )}
       </section>
 
-      <div className="flex items-center justify-between gap-4">
+      <div className="dashboard-panel flex items-center justify-between gap-4 px-5 py-4">
         <p className="text-sm text-slate-600">
           Page {page} of {pageCount}
         </p>
