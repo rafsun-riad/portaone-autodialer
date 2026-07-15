@@ -4,6 +4,7 @@ import csv
 import io
 
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.exceptions import AuthenticationFailed, ValidationError
 from rest_framework.pagination import PageNumberPagination
@@ -33,6 +34,7 @@ from autodialer.services.workflows import (
     handle_playback_webhook,
     handle_state_webhook,
     list_external_accounts,
+    reset_campaign_runtime_state,
     sync_customer_profile,
 )
 from autodialer.tasks import dispatch_campaign_calls_task, play_campaign_audio_task
@@ -206,7 +208,25 @@ class CampaignViewSet(ExternalSessionMixin, viewsets.ModelViewSet):
         serializer.save(owner=self.get_profile())
 
     def perform_update(self, serializer):
-        serializer.save(owner=self.get_profile())
+        campaign = serializer.save(owner=self.get_profile())
+
+        if campaign.scheduled_at and campaign.scheduled_at > timezone.now():
+            reset_campaign_runtime_state(campaign, reset_contacts=True)
+            campaign.status = Campaign.CampaignStatus.SCHEDULED
+            campaign.started_at = None
+            campaign.paused_at = None
+            campaign.finished_at = None
+            campaign.last_dispatched_at = None
+            campaign.save(
+                update_fields=[
+                    "status",
+                    "started_at",
+                    "paused_at",
+                    "finished_at",
+                    "last_dispatched_at",
+                    "updated_at",
+                ]
+            )
 
 
 class CampaignActionView(ExternalSessionMixin, APIView):

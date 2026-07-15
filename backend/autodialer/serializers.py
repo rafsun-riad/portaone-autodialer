@@ -32,7 +32,13 @@ class CampaignAudioSerializer(serializers.ModelSerializer):
             "file_url",
             "updated_at",
         ]
-        extra_kwargs = {"audio_file": {"write_only": True}}
+        extra_kwargs = {
+            "audio_file": {"write_only": True},
+            "original_name": {"read_only": True},
+            "mime_type": {"read_only": True},
+            "file_size": {"read_only": True},
+            "updated_at": {"read_only": True},
+        }
 
     def get_file_url(self, obj: CampaignAudio) -> str:
         request = self.context.get("request")
@@ -112,7 +118,11 @@ class CampaignSerializer(serializers.ModelSerializer):
         elif not attrs.get("status"):
             attrs["status"] = Campaign.CampaignStatus.NEW
 
-        if attrs.get("campaign_pace", 0) < 1:
+        campaign_pace = attrs.get(
+            "campaign_pace",
+            getattr(self.instance, "campaign_pace", 0),
+        )
+        if campaign_pace < 1:
             raise serializers.ValidationError(
                 {"campaign_pace": "Campaign pace must be at least 1 call per minute."}
             )

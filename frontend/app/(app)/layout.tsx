@@ -61,11 +61,11 @@ export default async function AppLayout({
   };
 
   return (
-    <div className="min-h-screen bg-[linear-gradient(180deg,rgba(236,240,247,0.95),rgba(246,248,252,1))] text-slate-900">
+    <div className="min-h-screen bg-[linear-gradient(180deg,rgba(236,240,247,0.95),rgba(246,248,252,1))] text-slate-900 lg:h-screen lg:overflow-hidden">
       <SessionBootstrap user={user} />
-      <div className="flex min-h-screen">
-        <aside className="dashboard-sidebar hidden min-h-screen w-[292px] shrink-0 flex-col justify-between px-7 py-8 lg:flex">
-          <div className="space-y-8">
+      <div className="flex min-h-screen lg:h-screen">
+        <aside className="dashboard-sidebar hidden w-[292px] shrink-0 lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:h-screen lg:flex-col lg:px-7 lg:py-8">
+          <div className="flex min-h-0 flex-1 flex-col">
             <div>
               <div className="flex items-center gap-3 text-white">
                 <div className="flex size-10 items-center justify-center rounded-2xl border border-white/30 bg-white/10 backdrop-blur-sm">
@@ -83,40 +83,43 @@ export default async function AppLayout({
                 one operator workspace.
               </p>
             </div>
-            <SidebarNav items={navigation} />
-          </div>
 
-          <div className="space-y-4 rounded-[1.8rem] border border-white/20 bg-white/10 p-5 backdrop-blur-sm">
-            <div>
-              <p className="text-xs uppercase tracking-[0.18em] text-white/60">
-                Signed in as
-              </p>
-              <h3 className="mt-2 text-lg font-semibold text-white">
-                {user.displayName}
-              </h3>
-              <p className="mt-1 text-sm text-white/72">{user.username}</p>
+            <div className="dashboard-sidebar-scroll mt-8 min-h-0 flex-1 pr-2">
+              <SidebarNav items={navigation} />
             </div>
-            <div className="grid gap-2 text-sm text-white/78">
-              <div className="flex items-center justify-between gap-4 rounded-2xl bg-white/8 px-3 py-2.5">
-                <span>Customer ID</span>
-                <span className="font-semibold text-white">
-                  {user.iCustomer ?? "-"}
-                </span>
+
+            <div className="space-y-4 rounded-[1.8rem] border border-white/20 bg-white/10 p-5 backdrop-blur-sm">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-white/60">
+                  Signed in as
+                </p>
+                <h3 className="mt-2 text-lg font-semibold text-white">
+                  {user.displayName}
+                </h3>
+                <p className="mt-1 text-sm text-white/72">{user.username}</p>
               </div>
-              <div className="flex items-center justify-between gap-4 rounded-2xl bg-white/8 px-3 py-2.5">
-                <span>Balance</span>
-                <span className="font-semibold text-white">
-                  {typeof user.balance === "number"
-                    ? user.balance.toFixed(2)
-                    : "-"}
-                </span>
+              <div className="grid gap-2 text-sm text-white/78">
+                <div className="flex items-center justify-between gap-4 rounded-2xl bg-white/8 px-3 py-2.5">
+                  <span>Customer ID</span>
+                  <span className="font-semibold text-white">
+                    {user.iCustomer ?? "-"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4 rounded-2xl bg-white/8 px-3 py-2.5">
+                  <span>Balance</span>
+                  <span className="font-semibold text-white">
+                    {typeof user.balance === "number"
+                      ? user.balance.toFixed(2)
+                      : "-"}
+                  </span>
+                </div>
               </div>
+              <LogoutButton />
             </div>
-            <LogoutButton />
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col px-4 py-4 sm:px-6 lg:px-8">
+        <div className="flex min-w-0 flex-1 flex-col px-4 py-4 sm:px-6 lg:ml-[292px] lg:h-screen lg:overflow-y-auto lg:px-8">
           <header className="dashboard-topbar rounded-[2rem] px-5 py-4 sm:px-7">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
@@ -145,7 +148,7 @@ export default async function AppLayout({
             </div>
           </header>
 
-          <main className="mt-5 min-h-[calc(100vh-8.5rem)] rounded-[2rem] bg-transparent">
+          <main className="mt-5 min-h-[calc(100vh-8.5rem)] rounded-[2rem] bg-transparent lg:pb-8">
             {children}
           </main>
         </div>

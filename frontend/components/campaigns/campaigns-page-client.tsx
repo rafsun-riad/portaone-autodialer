@@ -242,6 +242,30 @@ export function CampaignsPageClient() {
 
   const connectTo = form.watch("connect_to");
 
+  const actionVisibility = selectedCampaign
+    ? {
+        canStart: ["new", "scheduled", "overdue"].includes(
+          selectedCampaign.status,
+        ),
+        canPause: selectedCampaign.status === "processing",
+        canResume: selectedCampaign.status === "paused",
+        canRestart: ["finished", "canceled"].includes(selectedCampaign.status),
+        canStop: [
+          "new",
+          "scheduled",
+          "overdue",
+          "processing",
+          "paused",
+        ].includes(selectedCampaign.status),
+      }
+    : {
+        canStart: false,
+        canPause: false,
+        canResume: false,
+        canRestart: false,
+        canStop: false,
+      };
+
   useEffect(() => {
     const selectedOption = accountOptionsQuery.data?.options.find(
       (option) => option.connect_to === connectTo,
@@ -669,60 +693,70 @@ export function CampaignsPageClient() {
                   </div>
                 </div>
                 <div className="mt-5 flex flex-wrap gap-3">
-                  <Button
-                    onPress={() =>
-                      actionMutation.mutate({
-                        campaignId: selectedCampaign.id,
-                        action: "start",
-                      })
-                    }
-                  >
-                    <Play className="size-4" /> Start
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onPress={() =>
-                      actionMutation.mutate({
-                        campaignId: selectedCampaign.id,
-                        action: "pause",
-                      })
-                    }
-                  >
-                    <Pause className="size-4" /> Pause
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onPress={() =>
-                      actionMutation.mutate({
-                        campaignId: selectedCampaign.id,
-                        action: "resume",
-                      })
-                    }
-                  >
-                    <PhoneCall className="size-4" /> Resume
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onPress={() =>
-                      actionMutation.mutate({
-                        campaignId: selectedCampaign.id,
-                        action: "restart",
-                      })
-                    }
-                  >
-                    <RotateCcw className="size-4" /> Restart
-                  </Button>
-                  <Button
-                    variant="danger"
-                    onPress={() =>
-                      actionMutation.mutate({
-                        campaignId: selectedCampaign.id,
-                        action: "stop",
-                      })
-                    }
-                  >
-                    <Square className="size-4" /> Stop
-                  </Button>
+                  {actionVisibility.canStart ? (
+                    <Button
+                      onPress={() =>
+                        actionMutation.mutate({
+                          campaignId: selectedCampaign.id,
+                          action: "start",
+                        })
+                      }
+                    >
+                      <Play className="size-4" /> Start
+                    </Button>
+                  ) : null}
+                  {actionVisibility.canPause ? (
+                    <Button
+                      variant="secondary"
+                      onPress={() =>
+                        actionMutation.mutate({
+                          campaignId: selectedCampaign.id,
+                          action: "pause",
+                        })
+                      }
+                    >
+                      <Pause className="size-4" /> Pause
+                    </Button>
+                  ) : null}
+                  {actionVisibility.canResume ? (
+                    <Button
+                      variant="secondary"
+                      onPress={() =>
+                        actionMutation.mutate({
+                          campaignId: selectedCampaign.id,
+                          action: "resume",
+                        })
+                      }
+                    >
+                      <PhoneCall className="size-4" /> Resume
+                    </Button>
+                  ) : null}
+                  {actionVisibility.canRestart ? (
+                    <Button
+                      variant="secondary"
+                      onPress={() =>
+                        actionMutation.mutate({
+                          campaignId: selectedCampaign.id,
+                          action: "restart",
+                        })
+                      }
+                    >
+                      <RotateCcw className="size-4" /> Restart
+                    </Button>
+                  ) : null}
+                  {actionVisibility.canStop ? (
+                    <Button
+                      variant="danger"
+                      onPress={() =>
+                        actionMutation.mutate({
+                          campaignId: selectedCampaign.id,
+                          action: "stop",
+                        })
+                      }
+                    >
+                      <Square className="size-4" /> Stop
+                    </Button>
+                  ) : null}
                   <Button
                     variant="outline"
                     onPress={() =>

@@ -101,6 +101,28 @@ def resolve_campaign_status(scheduled_at, current_status: str | None = None) -> 
     return Campaign.CampaignStatus.NEW
 
 
+def reset_campaign_runtime_state(
+    campaign: Campaign,
+    *,
+    reset_contacts: bool = False,
+    now=None,
+) -> None:
+    now = now or timezone.now()
+
+    campaign.call_logs.filter(status__in=ACTIVE_CALL_STATES).update(
+        status="terminated",
+        reason="Campaign state reset",
+        update_time=now,
+        updated_at=now,
+    )
+
+    if reset_contacts:
+        campaign.contacts.exclude(status=Contact.ContactStatus.INVALID).update(
+            status=Contact.ContactStatus.NEW,
+            updated_at=now,
+        )
+
+
 def apply_campaign_action(campaign: Campaign, action_name: str) -> bool:
     now = timezone.now()
     should_dispatch = False
@@ -114,10 +136,14 @@ def apply_campaign_action(campaign: Campaign, action_name: str) -> bool:
             raise ValidationError(
                 {"detail": "Only new, scheduled, or overdue campaigns can be started."}
             )
+        reset_campaign_runtime_state(campaign, reset_contacts=True, now=now)
         campaign.status = Campaign.CampaignStatus.PROCESSING
         campaign.started_at = campaign.started_at or now
+        campaign.finished_at = None
+        campaign.paused_at = None
         should_dispatch = True
     elif action_name == "stop":
+        reset_campaign_runtime_state(campaign, reset_contacts=False, now=now)
         campaign.status = Campaign.CampaignStatus.CANCELED
         campaign.finished_at = now
     elif action_name == "pause":
@@ -141,13 +167,11 @@ def apply_campaign_action(campaign: Campaign, action_name: str) -> bool:
             raise ValidationError(
                 {"detail": "Only finished or canceled campaigns can be restarted."}
             )
+        reset_campaign_runtime_state(campaign, reset_contacts=True, now=now)
         campaign.status = Campaign.CampaignStatus.PROCESSING
         campaign.started_at = now
         campaign.finished_at = None
         campaign.paused_at = None
-        campaign.contacts.exclude(status=Contact.ContactStatus.INVALID).update(
-            status=Contact.ContactStatus.NEW
-        )
         should_dispatch = True
     else:
         raise ValidationError({"detail": "Unsupported campaign action."})

@@ -134,3 +134,8 @@ Thumbs.db
 
 #user-specific files
 prompts/
+
+backend/media
+
+celerybeat-schedule-shm
+celerybeat-schedule-wal
