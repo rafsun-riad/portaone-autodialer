@@ -112,3 +112,6 @@ class ExternalSystemClient:
 
     def play_audio(self, params: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/CallControl/play", {"params": params})
+
+    def terminate_call(self, params: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/CallControl/terminate_call", {"params": params})

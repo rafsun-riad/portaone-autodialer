@@ -141,6 +141,8 @@ export function CampaignsPageClient() {
       apiRequest<PaginatedResponse<Campaign>>(
         `/api/backend/campaigns/?page=${page}&search=${encodeURIComponent(campaignSearch)}`,
       ),
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
   });
 
   const accountOptionsQuery = useQuery({
@@ -158,6 +160,8 @@ export function CampaignsPageClient() {
       apiRequest<PaginatedResponse<CallLog>>(
         `/api/backend/campaigns/${selectedCampaign?.id}/calls/`,
       ),
+    refetchInterval: selectedCampaign ? 5000 : false,
+    refetchIntervalInBackground: true,
   });
 
   const saveMutation = useMutation({
@@ -283,6 +287,19 @@ export function CampaignsPageClient() {
       });
     }
   }, [accountOptionsQuery.data?.options, connectTo, editingCampaign, form]);
+
+  useEffect(() => {
+    if (!selectedCampaign || !campaignsQuery.data?.results) {
+      return;
+    }
+
+    const refreshedCampaign = campaignsQuery.data.results.find(
+      (campaign) => campaign.id === selectedCampaign.id,
+    );
+    if (refreshedCampaign) {
+      setSelectedCampaign(refreshedCampaign);
+    }
+  }, [campaignsQuery.data?.results, selectedCampaign]);
 
   const openCreate = () => {
     setEditingCampaign(null);

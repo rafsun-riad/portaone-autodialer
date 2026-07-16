@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -455,14 +454,63 @@ def handle_playback_webhook(payload: dict[str, Any]) -> CallLog | None:
         CallLog.objects.filter(
             Q(tracking_id=tracking_id) | Q(external_call_id=call_info.get("id"))
         )
+        .select_related("owner", "campaign")
         .order_by("-id")
         .first()
     )
     if call_log is None:
         return None
 
-    serialized_payload = json.dumps(payload)
-    if "prompt_playback_completed" in serialized_payload:
+    playback_event = payload.get("ivr_info", {}).get("event")
+    if playback_event == "prompt_playback_completed":
         call_log.playback_completed_at = timezone.now()
-        call_log.save(update_fields=["playback_completed_at", "updated_at"])
+        response_payload = dict(call_log.response_payload or {})
+
+        if (
+            call_log.owner_id
+            and call_log.external_call_id
+            and (call_info.get("tag") or call_log.call_tag)
+            and "termination_request" not in response_payload
+        ):
+            terminate_params = {
+                "call": {
+                    "id": call_log.external_call_id,
+                    "tag": call_info.get("tag") or call_log.call_tag,
+                }
+            }
+            response_payload["termination_request"] = terminate_params
+
+            try:
+                termination_response = ExternalSystemClient(
+                    access_token=call_log.owner.access_token
+                ).terminate_call(terminate_params)
+            except ExternalSystemError as exc:
+                response_payload["termination_error"] = exc.payload or {
+                    "message": str(exc)
+                }
+                call_log.reason = (
+                    exc.payload.get("faultstring", str(exc))
+                    if exc.payload
+                    else str(exc)
+                )
+                logger.exception(
+                    "Terminate request failed for call %s after playback completion",
+                    call_log.external_call_id,
+                )
+            else:
+                response_payload["termination_response"] = termination_response
+                logger.warning(
+                    "Terminate request accepted for call %s after playback completion",
+                    call_log.external_call_id,
+                )
+
+        call_log.response_payload = response_payload
+        call_log.save(
+            update_fields=[
+                "playback_completed_at",
+                "response_payload",
+                "reason",
+                "updated_at",
+            ]
+        )
     return call_log
