@@ -19,6 +19,7 @@ from autodialer.models import (
 )
 from autodialer.services.external_api import ExternalSystemClient, ExternalSystemError
 from autodialer.utils import (
+    build_public_playback_audio_url,
     build_public_url,
     normalize_bangladesh_number,
     parse_external_datetime,
@@ -378,7 +379,12 @@ def play_campaign_audio(call_log: CallLog) -> None:
 
     client = ExternalSystemClient(access_token=call_log.owner.access_token)
     callback_url = build_playback_callback_url()
-    media_url = build_public_url(audio.audio_file.url)
+    media_version = str(int(audio.updated_at.timestamp())) if audio.updated_at else None
+    media_url = build_public_playback_audio_url(
+        call_log.campaign_id,
+        audio.original_name or audio.audio_file.name,
+        media_version,
+    )
     playback_params = {
         "call": {"id": call_log.external_call_id, "tag": call_log.call_tag},
         "callback_on_events": [

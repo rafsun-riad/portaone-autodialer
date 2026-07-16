@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from autodialer.models import CallLog, Campaign, CampaignAudio, Contact
-from autodialer.utils import normalize_bangladesh_number
+from autodialer.utils import build_versioned_media_url, normalize_bangladesh_number
 
 
 class LoginSerializer(serializers.Serializer):
@@ -41,10 +41,8 @@ class CampaignAudioSerializer(serializers.ModelSerializer):
         }
 
     def get_file_url(self, obj: CampaignAudio) -> str:
-        request = self.context.get("request")
-        if request is None:
-            return obj.audio_file.url
-        return request.build_absolute_uri(obj.audio_file.url)
+        version = str(int(obj.updated_at.timestamp())) if obj.updated_at else None
+        return build_versioned_media_url(obj.audio_file.url, version)
 
     def validate_audio_file(self, value):
         extension = value.name.rsplit(".", 1)[-1].lower() if "." in value.name else ""

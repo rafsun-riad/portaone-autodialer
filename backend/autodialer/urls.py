@@ -14,6 +14,7 @@ from autodialer.views import (
     LoginView,
     MeView,
     PlaybackWebhookView,
+    PublicCampaignAudioPlaybackView,
 )
 
 router = DefaultRouter()
@@ -58,6 +59,11 @@ urlpatterns = [
         "webhooks/calls/playback/",
         PlaybackWebhookView.as_view(),
         name="playback-webhook",
+    ),
+    path(
+        "public/campaign-audio/<int:campaign_id>/<str:versioned_name>",
+        PublicCampaignAudioPlaybackView.as_view(),
+        name="public-campaign-audio",
     ),
     path("", include(router.urls)),
 ]

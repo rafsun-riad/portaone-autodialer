@@ -4,6 +4,7 @@ import csv
 import io
 
 from django.db.models import Q
+from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.exceptions import AuthenticationFailed, ValidationError
@@ -292,6 +293,24 @@ class CampaignAudioView(ExternalSessionMixin, APIView):
         audio.audio_file.delete(save=False)
         audio.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PublicCampaignAudioPlaybackView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request, campaign_id: int, versioned_name: str):
+        audio = CampaignAudio.objects.filter(campaign_id=campaign_id).first()
+        if audio is None or not audio.audio_file:
+            raise Http404("Campaign audio not found.")
+
+        audio.audio_file.open("rb")
+        response = FileResponse(
+            audio.audio_file,
+            content_type=audio.mime_type or "application/octet-stream",
+        )
+        response["Content-Disposition"] = f'inline; filename="{audio.original_name}"'
+        return response
 
 
 class ContactViewSet(ExternalSessionMixin, viewsets.ModelViewSet):

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from urllib.parse import urljoin
+from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from django.conf import settings
 from django.utils import timezone
@@ -46,3 +47,29 @@ def build_public_url(path: str) -> str:
         or settings.WEBHOOK_ORIGIN
     )
     return urljoin(f"{str(public_origin).rstrip('/')}/", path.lstrip("/"))
+
+
+def add_url_query_params(url: str, params: dict[str, str]) -> str:
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query.update(params)
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+    )
+
+
+def build_versioned_media_url(path: str, version: str | None) -> str:
+    public_url = build_public_url(path)
+    if not version:
+        return public_url
+    return add_url_query_params(public_url, {"v": version})
+
+
+def build_public_playback_audio_url(
+    campaign_id: int, file_name: str, version: str | None
+) -> str:
+    extension = Path(file_name).suffix or ".wav"
+    version_segment = version or "current"
+    return build_public_url(
+        f"/api/public/campaign-audio/{campaign_id}/{campaign_id}-{version_segment}{extension}"
+    )

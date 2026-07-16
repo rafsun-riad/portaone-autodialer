@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from django.core.files.storage import default_storage
 from django.db import models
+from django.utils.text import get_valid_filename
 
 
 class TimestampedModel(models.Model):
@@ -77,11 +79,24 @@ class Campaign(TimestampedModel):
 
 
 def campaign_audio_upload_to(instance: "CampaignAudio", filename: str) -> str:
-    extension = Path(filename).suffix.lower()
-    return (
-        f"campaign-audio/{instance.campaign.owner.username}/"
-        f"{instance.campaign_id}/{instance.campaign_id}{extension}"
+    parsed_name = Path(filename)
+    extension = parsed_name.suffix.lower()
+    safe_stem = (
+        get_valid_filename(parsed_name.stem) or f"campaign_audio_{instance.campaign_id}"
     )
+    base_directory = (
+        f"campaign-audio/{instance.campaign.owner.username}/{instance.campaign_id}"
+    )
+    candidate_name = f"{safe_stem}{extension}"
+    candidate_path = f"{base_directory}/{candidate_name}"
+    duplicate_counter = 2
+
+    while default_storage.exists(candidate_path):
+        candidate_name = f"{safe_stem}-{duplicate_counter}{extension}"
+        candidate_path = f"{base_directory}/{candidate_name}"
+        duplicate_counter += 1
+
+    return candidate_path
 
 
 class CampaignAudio(TimestampedModel):

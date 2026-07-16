@@ -49,6 +49,17 @@ async function proxyRequest(
     responseHeaders.set("Content-Disposition", disposition);
   }
 
+  if (
+    backendResponse.status === 204 ||
+    backendResponse.status === 205 ||
+    backendResponse.status === 304
+  ) {
+    return new NextResponse(null, {
+      status: backendResponse.status,
+      headers: responseHeaders,
+    });
+  }
+
   return new NextResponse(await backendResponse.arrayBuffer(), {
     status: backendResponse.status,
     headers: responseHeaders,
