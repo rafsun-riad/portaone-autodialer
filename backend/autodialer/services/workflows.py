@@ -38,6 +38,13 @@ ACTIVE_CALL_STATES = {
     "parked",
 }
 
+
+def is_internal_outgoing_leg(payload: dict[str, Any]) -> bool:
+    return (
+        payload.get("type") == "outgoing" and payload.get("is_external_call") is False
+    )
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -312,6 +319,7 @@ def handle_state_webhook(payload: dict[str, Any]) -> CallLog:
     payload = unwrap_webhook_payload(payload)
     tracking_id = payload.get("tracking_id")
     call_info = payload.get("call", {})
+    outgoing_leg = is_internal_outgoing_leg(payload)
     call_log = (
         CallLog.objects.select_related("campaign", "contact", "owner")
         .filter(
@@ -332,7 +340,8 @@ def handle_state_webhook(payload: dict[str, Any]) -> CallLog:
         )
 
     call_log.external_call_id = call_info.get("id", call_log.external_call_id)
-    call_log.call_tag = call_info.get("tag", call_log.call_tag)
+    if outgoing_leg or not call_log.call_tag:
+        call_log.call_tag = call_info.get("tag", call_log.call_tag)
     call_log.status = payload.get("state", call_log.status)
     call_log.previous_tracking_id = payload.get(
         "previous_tracking_id", call_log.previous_tracking_id

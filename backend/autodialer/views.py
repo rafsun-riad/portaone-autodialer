@@ -34,6 +34,7 @@ from autodialer.services.workflows import (
     apply_campaign_action,
     handle_playback_webhook,
     handle_state_webhook,
+    is_internal_outgoing_leg,
     list_external_accounts,
     reset_campaign_runtime_state,
     sync_customer_profile,
@@ -435,7 +436,17 @@ class CallStateWebhookView(APIView):
     def post(self, request):
         append_webhook_payload("call-state.log", request.data)
         call_log = handle_state_webhook(request.data)
-        if call_log.status == "connected" and call_log.pk:
+        payload = (
+            request.data.get("call_info") if isinstance(request.data, dict) else None
+        )
+        normalized_payload = payload if isinstance(payload, dict) else request.data
+        if (
+            call_log.status == "connected"
+            and call_log.pk
+            and isinstance(normalized_payload, dict)
+            and is_internal_outgoing_leg(normalized_payload)
+            and call_log.playback_requested_at is None
+        ):
             play_campaign_audio_task.delay(call_log.pk)
         return Response({"success": 1, "call_log_id": call_log.pk})
 
