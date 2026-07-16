@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from django.conf import settings
@@ -35,6 +36,15 @@ ACTIVE_CALL_STATES = {
     "transferred",
     "parked",
 }
+
+logger = logging.getLogger(__name__)
+
+
+def unwrap_webhook_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    wrapped_payload = payload.get("call_info")
+    if isinstance(wrapped_payload, dict):
+        return wrapped_payload
+    return payload
 
 
 def sync_customer_profile(
@@ -298,6 +308,7 @@ def dispatch_campaign_calls(campaign: Campaign) -> list[int]:
 
 
 def handle_state_webhook(payload: dict[str, Any]) -> CallLog:
+    payload = unwrap_webhook_payload(payload)
     tracking_id = payload.get("tracking_id")
     call_info = payload.get("call", {})
     call_log = (
@@ -366,24 +377,63 @@ def play_campaign_audio(call_log: CallLog) -> None:
         return
 
     client = ExternalSystemClient(access_token=call_log.owner.access_token)
-    client.play_audio(
-        {
-            "call": {"id": call_log.external_call_id, "tag": call_log.call_tag},
-            "callback_on_events": [
-                "prompt_playback_interrupted",
-                "prompt_playback_completed",
-            ],
-            "callback_url": build_playback_callback_url(),
-            "interrupt_playback_on_input": "Y",
-            "repeat": 1,
-            "url": build_public_url(audio.audio_file.url),
-        }
+    callback_url = build_playback_callback_url()
+    media_url = build_public_url(audio.audio_file.url)
+    playback_params = {
+        "call": {"id": call_log.external_call_id, "tag": call_log.call_tag},
+        "callback_on_events": [
+            "prompt_playback_interrupted",
+            "prompt_playback_completed",
+        ],
+        "callback_url": callback_url,
+        "interrupt_playback_on_input": "Y",
+        "repeat": 1,
+        "url": media_url,
+    }
+
+    logger.warning(
+        "Playback request prepared for call %s with callback_url=%s media_url=%s",
+        call_log.external_call_id,
+        callback_url,
+        media_url,
     )
+
+    response_payload = dict(call_log.response_payload or {})
+    response_payload["playback_request"] = playback_params
+
+    try:
+        playback_response = client.play_audio(playback_params)
+    except ExternalSystemError as exc:
+        response_payload["playback_error"] = exc.payload or {"message": str(exc)}
+        call_log.response_payload = response_payload
+        call_log.reason = (
+            exc.payload.get("faultstring", str(exc)) if exc.payload else str(exc)
+        )
+        call_log.save(update_fields=["response_payload", "reason", "updated_at"])
+        logger.exception(
+            "Playback request failed for call %s with callback_url=%s media_url=%s",
+            call_log.external_call_id,
+            callback_url,
+            media_url,
+        )
+        return
+
+    response_payload["playback_response"] = playback_response
+    call_log.response_payload = response_payload
     call_log.playback_requested_at = timezone.now()
-    call_log.save(update_fields=["playback_requested_at", "updated_at"])
+    call_log.save(
+        update_fields=["response_payload", "playback_requested_at", "updated_at"]
+    )
+    logger.warning(
+        "Playback request accepted for call %s with callback_url=%s media_url=%s",
+        call_log.external_call_id,
+        callback_url,
+        media_url,
+    )
 
 
 def handle_playback_webhook(payload: dict[str, Any]) -> CallLog | None:
+    payload = unwrap_webhook_payload(payload)
     tracking_id = payload.get("tracking_id")
     call_info = payload.get("call", {})
     call_log = (

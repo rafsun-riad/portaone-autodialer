@@ -35,6 +35,21 @@ type AudioResponse = {
   } | null;
 };
 
+function getPlayableAudioUrl(fileUrl: string) {
+  try {
+    const url = new URL(fileUrl, window.location.origin);
+    const mediaPath = url.pathname.startsWith("/media/")
+      ? url.pathname.replace(/^\/media\//, "")
+      : url.pathname.replace(/^\//, "");
+    return `/api/media/${mediaPath}${url.search}`;
+  } catch {
+    const normalizedPath = fileUrl.startsWith("/media/")
+      ? fileUrl.replace(/^\/media\//, "")
+      : fileUrl.replace(/^\//, "");
+    return `/api/media/${normalizedPath}`;
+  }
+}
+
 export function CampaignAudioPageClient() {
   const queryClient = useQueryClient();
   const [selectedCampaignId, setSelectedCampaignId] = useState<number | null>(
@@ -242,7 +257,7 @@ export function CampaignAudioPageClient() {
                 <audio
                   className="mt-5 w-full"
                   controls
-                  src={audioQuery.data.audio.file_url}
+                  src={getPlayableAudioUrl(audioQuery.data.audio.file_url)}
                 />
               </div>
             ) : (

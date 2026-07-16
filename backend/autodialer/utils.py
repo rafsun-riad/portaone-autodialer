@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from urllib.parse import urljoin
 
 from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from dotenv import dotenv_values
 
 
 def normalize_bangladesh_number(value: str) -> str:
@@ -35,4 +37,12 @@ def parse_external_datetime(value: str | None):
 
 
 def build_public_url(path: str) -> str:
-    return urljoin(f"{settings.WEBHOOK_ORIGIN.rstrip('/')}/", path.lstrip("/"))
+    env_values = dotenv_values(settings.BASE_DIR / ".env")
+    public_origin = (
+        env_values.get("WEBHOOK_ORIGIN")
+        or env_values.get("BACKEND_API_ORIGIN")
+        or os.getenv("WEBHOOK_ORIGIN")
+        or os.getenv("BACKEND_API_ORIGIN")
+        or settings.WEBHOOK_ORIGIN
+    )
+    return urljoin(f"{str(public_origin).rstrip('/')}/", path.lstrip("/"))
