@@ -264,7 +264,7 @@ export function ContactsPageClient({
       ) : null}
 
       <section className="dashboard-panel grid gap-4 p-5 lg:grid-cols-4">
-        <div className="dashboard-input-shell flex items-center gap-3 px-4 py-3 lg:col-span-2">
+        <div className="dashboard-input-shell flex items-center gap-3 px-4 py-3 lg:col-span-2 rounded-2xl">
           <Search className="size-4 text-slate-400" />
           <input
             className="w-full bg-transparent outline-none"

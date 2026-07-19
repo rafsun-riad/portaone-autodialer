@@ -362,7 +362,7 @@ export function CampaignsPageClient() {
       ) : null}
 
       <section className="dashboard-panel grid gap-4 p-5 lg:grid-cols-[1fr_auto]">
-        <div className="dashboard-input-shell flex items-center gap-3 px-4 py-3">
+        <div className="dashboard-input-shell flex items-center gap-3 px-4 py-3 rounded-2xl">
           <Search className="size-4 text-slate-400" />
           <input
             className="w-full bg-transparent outline-none"
