@@ -6,7 +6,7 @@ export default function AppLoading() {
         <div className="skeleton-block h-36" />
         <div className="skeleton-block h-36" />
       </div>
-      <div className="skeleton-block h-[420px]" />
+      <div className="skeleton-block h-105" />
     </div>
   );
 }

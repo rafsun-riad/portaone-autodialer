@@ -8,7 +8,11 @@ import { fetchBackendJson } from "@/lib/server-api";
 import { getStoredSession } from "@/lib/session";
 import { type SessionUser } from "@/stores/app-store";
 
-const navigation = [
+const navigation: Array<{
+  href: string;
+  label: string;
+  icon: "dashboard" | "campaigns" | "contacts" | "audio";
+}> = [
   { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { href: "/campaigns", label: "Campaigns", icon: "campaigns" },
   { href: "/contacts", label: "Contacts", icon: "contacts" },
@@ -64,7 +68,7 @@ export default async function AppLayout({
     <div className="min-h-screen bg-[linear-gradient(180deg,rgba(236,240,247,0.95),rgba(246,248,252,1))] text-slate-900 lg:h-screen lg:overflow-hidden">
       <SessionBootstrap user={user} />
       <div className="flex min-h-screen lg:h-screen">
-        <aside className="dashboard-sidebar hidden w-[292px] shrink-0 lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:h-screen lg:flex-col lg:px-7 lg:py-8">
+        <aside className="dashboard-sidebar hidden w-73 shrink-0 lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:h-screen lg:flex-col lg:px-7 lg:py-8">
           <div className="flex min-h-0 flex-1 flex-col">
             <div>
               <div className="flex items-center gap-3 text-white">
@@ -119,7 +123,7 @@ export default async function AppLayout({
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col px-4 py-4 sm:px-6 lg:ml-[292px] lg:h-screen lg:overflow-y-auto lg:px-8">
+        <div className="flex min-w-0 flex-1 flex-col px-4 py-4 sm:px-6 lg:ml-73 lg:h-screen lg:overflow-y-auto lg:px-8">
           <header className="dashboard-topbar rounded-[2rem] px-5 py-4 sm:px-7">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>

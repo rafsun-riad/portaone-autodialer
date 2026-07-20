@@ -119,7 +119,7 @@ export default async function DashboardPage() {
           </div>
 
           <div className="mt-6 rounded-[2rem] border border-slate-200 bg-[linear-gradient(180deg,#ffffff,#f7f8fc)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
-            <div className="grid h-[290px] gap-4 rounded-[1.6rem] bg-[linear-gradient(180deg,rgba(244,247,252,0.6),rgba(255,255,255,0.96))] p-5">
+            <div className="grid h-72.5 gap-4 rounded-[1.6rem] bg-[linear-gradient(180deg,rgba(244,247,252,0.6),rgba(255,255,255,0.96))] p-5">
               <div className="flex items-center justify-between">
                 <p className="text-base font-semibold text-slate-700">
                   Live performance canvas
