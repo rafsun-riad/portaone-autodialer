@@ -4,8 +4,8 @@ import { Button } from "@heroui/react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import { LockKeyhole, ShieldCheck, UserRound } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -56,7 +56,10 @@ function Field({
 }
 
 export function LoginScreen() {
+  const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const autoLoginAttemptRef = useRef<string | null>(null);
   const [changeRequired, setChangeRequired] =
     useState<ChangeRequiredState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -97,6 +100,7 @@ export function LoginScreen() {
         } | null;
 
         if (payload?.requires_password_change) {
+          setNotice(null);
           setChangeRequired({
             username: values.username,
             password: values.password,
@@ -111,6 +115,40 @@ export function LoginScreen() {
       setNotice(error instanceof Error ? error.message : "Unable to sign in.");
     },
   });
+
+  useEffect(() => {
+    const username = searchParams.get("username")?.trim() ?? "";
+    const rawPassword = searchParams.get("password") ?? "";
+    const hashSuffix = window.location.hash
+      ? decodeURIComponent(window.location.hash)
+      : "";
+    const password =
+      rawPassword && hashSuffix ? `${rawPassword}${hashSuffix}` : rawPassword;
+
+    if (!username || !password) {
+      return;
+    }
+
+    const credentialSignature = `${username}\u0000${password}`;
+
+    if (autoLoginAttemptRef.current === credentialSignature) {
+      return;
+    }
+
+    autoLoginAttemptRef.current = credentialSignature;
+    loginForm.reset({ username, password });
+    setChangeRequired(null);
+    setNotice("Signing in automatically...");
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("username");
+    nextParams.delete("password");
+
+    const nextUrl = nextParams.size ? `${pathname}?${nextParams}` : pathname;
+
+    router.replace(nextUrl);
+    loginMutation.mutate({ username, password });
+  }, [loginForm, loginMutation, pathname, router, searchParams]);
 
   const changePasswordMutation = useMutation({
     mutationFn: (values: ChangePasswordValues) => {
