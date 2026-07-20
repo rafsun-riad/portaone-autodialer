@@ -12,7 +12,7 @@ export default async function Home() {
 
   return (
     <main className="relative isolate min-h-screen overflow-hidden px-6 py-10 sm:px-10 lg:px-16">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(15,118,110,0.18),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(217,119,6,0.18),_transparent_28%),linear-gradient(180deg,_rgba(255,255,255,0.82),_rgba(244,247,244,0.98))]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(15,118,110,0.18),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(217,119,6,0.18),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.82),rgba(244,247,244,0.98))]" />
       <div className="relative mx-auto grid min-h-[calc(100vh-5rem)] max-w-7xl gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
         <section className="space-y-8 rounded-[2rem] border border-white/70 bg-white/65 p-8 shadow-[0_28px_90px_rgba(15,23,42,0.08)] backdrop-blur-xl lg:p-12">
           <div className="inline-flex items-center gap-3 rounded-full border border-teal-200/70 bg-teal-50/90 px-4 py-2 text-sm font-medium text-teal-900">
