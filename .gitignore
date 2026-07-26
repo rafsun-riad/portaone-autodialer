@@ -139,3 +139,5 @@ backend/media
 
 celerybeat-schedule-shm
 celerybeat-schedule-wal
+
+staticfiles/
