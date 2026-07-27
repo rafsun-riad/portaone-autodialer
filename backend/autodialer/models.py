@@ -26,7 +26,7 @@ class ExternalUserProfile(TimestampedModel):
     last_synced_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ["username"]
+        ordering = ["username"]  # noqa: RUF012
 
     def __str__(self) -> str:
         return self.username
@@ -67,8 +67,8 @@ class Campaign(TimestampedModel):
     last_dispatched_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ["-scheduled_at", "-created_at"]
-        indexes = [
+        ordering = ["-scheduled_at", "-created_at"]  # noqa: RUF012
+        indexes = [  # noqa: RUF012
             models.Index(fields=["owner", "status"]),
             models.Index(fields=["owner", "name"]),
             models.Index(fields=["owner", "scheduled_at"]),
@@ -78,7 +78,7 @@ class Campaign(TimestampedModel):
         return self.name
 
 
-def campaign_audio_upload_to(instance: "CampaignAudio", filename: str) -> str:
+def campaign_audio_upload_to(instance: CampaignAudio, filename: str) -> str:
     parsed_name = Path(filename)
     extension = parsed_name.suffix.lower()
     safe_stem = (
@@ -111,7 +111,7 @@ class CampaignAudio(TimestampedModel):
     file_size = models.PositiveIntegerField(default=0)
 
     class Meta:
-        ordering = ["-updated_at"]
+        ordering = ["-updated_at"]  # noqa: RUF012
 
     def __str__(self) -> str:
         return self.original_name
@@ -149,14 +149,14 @@ class Contact(TimestampedModel):
     metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ["-created_at"]
-        constraints = [
+        ordering = ["-created_at"]  # noqa: RUF012
+        constraints = [  # noqa: RUF012
             models.UniqueConstraint(
                 fields=["owner", "campaign", "phone_number"],
                 name="unique_contact_per_campaign_phone",
             )
         ]
-        indexes = [
+        indexes = [  # noqa: RUF012
             models.Index(fields=["owner", "status"]),
             models.Index(fields=["campaign", "status"]),
             models.Index(fields=["owner", "phone_number"]),
@@ -210,8 +210,8 @@ class CallLog(TimestampedModel):
     playback_completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ["-created_at"]
-        indexes = [
+        ordering = ["-created_at"]  # noqa: RUF012
+        indexes = [  # noqa: RUF012
             models.Index(fields=["campaign", "status"]),
             models.Index(fields=["contact", "status"]),
             models.Index(fields=["tracking_id"]),

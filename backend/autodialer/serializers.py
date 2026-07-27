@@ -23,7 +23,7 @@ class CampaignAudioSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CampaignAudio
-        fields = [
+        fields = [  # noqa: RUF012
             "id",
             "audio_file",
             "original_name",
@@ -32,7 +32,7 @@ class CampaignAudioSerializer(serializers.ModelSerializer):
             "file_url",
             "updated_at",
         ]
-        extra_kwargs = {
+        extra_kwargs = {  # noqa: RUF012
             "audio_file": {"write_only": True},
             "original_name": {"read_only": True},
             "mime_type": {"read_only": True},
@@ -59,7 +59,7 @@ class CampaignSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Campaign
-        fields = [
+        fields = [  # noqa: RUF012
             "id",
             "name",
             "status",
@@ -133,7 +133,7 @@ class ContactSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Contact
-        fields = [
+        fields = [  # noqa: RUF012
             "id",
             "campaign",
             "campaign_name",
@@ -166,7 +166,7 @@ class CallLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CallLog
-        fields = [
+        fields = [  # noqa: RUF012
             "id",
             "tracking_id",
             "external_call_id",
