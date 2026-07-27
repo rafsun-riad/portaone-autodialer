@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-
+import path from "path";
 const allowedDevOrigins = (
   process.env.NEXT_ALLOWED_DEV_ORIGINS ?? "*.trycloudflare.com"
 )
@@ -9,6 +9,9 @@ const allowedDevOrigins = (
 
 const nextConfig: NextConfig = {
   allowedDevOrigins,
+  turbopack: {
+    root: path.join(__dirname),
+  },
 };
 
 export default nextConfig;
