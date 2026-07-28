@@ -84,7 +84,7 @@ class ExternalSessionMixin:
 
 
 class LoginView(APIView):
-    parser_classes = [JSONParser]
+    parser_classes = [JSONParser]  # noqa: RUF012
 
     @staticmethod
     def _external_error_response(exc: ExternalSystemError):
@@ -138,7 +138,7 @@ class LoginView(APIView):
 
 
 class ChangePasswordView(APIView):
-    parser_classes = [JSONParser]
+    parser_classes = [JSONParser]  # noqa: RUF012
 
     def post(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
@@ -247,7 +247,7 @@ class CampaignActionView(ExternalSessionMixin, APIView):
 
 
 class CampaignAudioView(ExternalSessionMixin, APIView):
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser]  # noqa: RUF012
 
     def get_campaign(self, campaign_id: int) -> Campaign:
         campaign = Campaign.objects.filter(
@@ -297,8 +297,8 @@ class CampaignAudioView(ExternalSessionMixin, APIView):
 
 
 class PublicCampaignAudioPlaybackView(APIView):
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes = []  # noqa: RUF012
+    permission_classes = []  # noqa: RUF012
 
     def get(self, request, campaign_id: int, versioned_name: str):
         audio = CampaignAudio.objects.filter(campaign_id=campaign_id).first()
@@ -353,7 +353,7 @@ class ContactViewSet(ExternalSessionMixin, viewsets.ModelViewSet):
 
 
 class BulkContactUploadView(ExternalSessionMixin, APIView):
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser]  # noqa: RUF012
 
     def post(self, request):
         profile = self.get_profile()
@@ -388,7 +388,7 @@ class BulkContactUploadView(ExternalSessionMixin, APIView):
                 continue
 
             phone_number = serializer.validated_data["phone_number"]
-            contact, created = Contact.objects.update_or_create(
+            _, created = Contact.objects.update_or_create(
                 owner=profile,
                 campaign=campaign,
                 phone_number=phone_number,
@@ -431,7 +431,7 @@ class CampaignCallLogView(
 
 
 class CallStateWebhookView(APIView):
-    parser_classes = [JSONParser]
+    parser_classes = [JSONParser]  # noqa: RUF012
 
     def post(self, request):
         append_webhook_payload("call-state.log", request.data)
@@ -452,7 +452,7 @@ class CallStateWebhookView(APIView):
 
 
 class PlaybackWebhookView(APIView):
-    parser_classes = [JSONParser]
+    parser_classes = [JSONParser]  # noqa: RUF012
 
     def post(self, request):
         append_webhook_payload("playback-events.log", request.data)
