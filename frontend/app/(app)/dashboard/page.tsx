@@ -7,6 +7,7 @@ import {
   MessageSquareMore,
   Radio,
   ShieldCheck,
+  Wallet,
 } from "lucide-react";
 
 type MeResponse = {
@@ -32,6 +33,33 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-5">
+      <header className="dashboard-topbar rounded-[2rem] px-5 py-4 sm:px-7">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="section-heading">Campaign workspace</p>
+            <h1 className="mt-2 text-2xl font-semibold text-slate-950 sm:text-[2rem]">
+              Voice operations
+            </h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Schedules stay in Bangladesh time and the right panel remains
+              dedicated to day-to-day operator work.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 self-start rounded-full border border-slate-200 bg-white px-3 py-2 shadow-[0_14px_35px_rgba(15,23,42,0.06)] md:self-auto">
+            <div className="flex size-10 items-center justify-center rounded-full bg-[linear-gradient(135deg,#8b5cf6,#ec4899)] text-white">
+              <Wallet className="size-4" />
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                Active operator
+              </p>
+              <p className="text-sm font-semibold text-slate-900">
+                {displayName}
+              </p>
+            </div>
+          </div>
+        </div>
+      </header>
       <section className="grid gap-4 xl:grid-cols-[1.45fr_0.55fr]">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="dashboard-stat-card">

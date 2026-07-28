@@ -1,4 +1,4 @@
-import { PhoneCall, Wallet } from "lucide-react";
+import { PhoneCall } from "lucide-react";
 import { redirect } from "next/navigation";
 
 import { SidebarNav } from "@/components/app/sidebar-nav";
@@ -124,34 +124,6 @@ export default async function AppLayout({
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col px-4 py-4 sm:px-6 lg:ml-73 lg:h-screen lg:overflow-y-auto lg:px-8">
-          <header className="dashboard-topbar rounded-[2rem] px-5 py-4 sm:px-7">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="section-heading">Campaign workspace</p>
-                <h1 className="mt-2 text-2xl font-semibold text-slate-950 sm:text-[2rem]">
-                  Voice operations
-                </h1>
-                <p className="mt-1 text-sm text-slate-600">
-                  Schedules stay in Bangladesh time and the right panel remains
-                  dedicated to day-to-day operator work.
-                </p>
-              </div>
-              <div className="flex items-center gap-3 self-start rounded-full border border-slate-200 bg-white px-3 py-2 shadow-[0_14px_35px_rgba(15,23,42,0.06)] md:self-auto">
-                <div className="flex size-10 items-center justify-center rounded-full bg-[linear-gradient(135deg,#8b5cf6,#ec4899)] text-white">
-                  <Wallet className="size-4" />
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
-                    Active operator
-                  </p>
-                  <p className="text-sm font-semibold text-slate-900">
-                    {user.displayName}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </header>
-
           <main className="mt-5 min-h-[calc(100vh-8.5rem)] rounded-[2rem] bg-transparent lg:pb-8">
             {children}
           </main>
