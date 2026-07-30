@@ -1,4 +1,5 @@
 "use client";
+"use no memo";
 
 import { Button } from "@heroui/react";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -244,6 +245,7 @@ export function CampaignsPageClient() {
     },
   });
 
+  // eslint-disable-next-line react-hooks/incompatible-library
   const connectTo = form.watch("connect_to");
 
   const actionVisibility = selectedCampaign
