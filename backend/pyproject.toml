@@ -11,9 +11,9 @@ dependencies = [
     "django-filter>=25.1",
     "djangorestframework>=3.17.1",
     "dj-database-url>=3.0.1",
-    "psycopg[binary]>=3.2.9",
     "python-dotenv>=1.1.1",
     "redis>=6.2.0",
     "requests>=2.32.4",
     "gunicorn>=26.0.0",
+    "psycopg>=3.3.4",
 ]
