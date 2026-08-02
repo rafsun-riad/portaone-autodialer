@@ -46,11 +46,11 @@ def activate_due_campaigns() -> int:
 
 
 @shared_task(name="autodialer.tasks.dispatch_campaign_calls_task")
-def dispatch_campaign_calls_task(campaign_id: int) -> list[int]:
+def dispatch_campaign_calls_task(campaign_id: str) -> list[str]:
     campaign = Campaign.objects.select_related("owner").filter(pk=campaign_id).first()
     if campaign is None:
         return []
-    return dispatch_campaign_calls(campaign)
+    return [str(call_log_id) for call_log_id in dispatch_campaign_calls(campaign)]
 
 
 @shared_task(name="autodialer.tasks.pump_processing_campaigns")
@@ -66,7 +66,7 @@ def pump_processing_campaigns() -> int:
 
 
 @shared_task(name="autodialer.tasks.play_campaign_audio_task")
-def play_campaign_audio_task(call_log_id: int) -> None:
+def play_campaign_audio_task(call_log_id: str) -> None:
     from autodialer.models import CallLog
 
     call_log = (

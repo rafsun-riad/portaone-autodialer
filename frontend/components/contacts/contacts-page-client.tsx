@@ -19,14 +19,16 @@ type PaginatedResponse<T> = {
   results: T[];
 };
 
+type EntityId = string;
+
 type CampaignOption = {
-  id: number;
+  id: EntityId;
   name: string;
 };
 
 type Contact = {
-  id: number;
-  campaign: number;
+  id: EntityId;
+  campaign: EntityId;
   campaign_name: string;
   phone_number: string;
   name: string;
@@ -44,8 +46,10 @@ const contactStatuses = [
   "invalid",
 ] as const;
 
+const campaignIdSchema = z.string().min(1, "Campaign is required.");
+
 const contactSchema = z.object({
-  campaign: z.number().int().positive("Campaign is required."),
+  campaign: campaignIdSchema,
   phone_number: z.string().min(8, "Phone number is required."),
   name: z.string().min(2, "Name is required."),
   comments: z.string().optional(),
@@ -53,7 +57,7 @@ const contactSchema = z.object({
 });
 
 const bulkSchema = z.object({
-  campaign: z.number().int().positive("Campaign is required."),
+  campaign: campaignIdSchema,
   file: z.any(),
 });
 
@@ -87,7 +91,7 @@ export function ContactsPageClient({
   const form = useForm<ContactValues>({
     resolver: zodResolver(contactSchema),
     defaultValues: {
-      campaign: initialCampaignId ? Number(initialCampaignId) : 0,
+      campaign: initialCampaignId,
       phone_number: "",
       name: "",
       comments: "",
@@ -98,7 +102,7 @@ export function ContactsPageClient({
   const bulkForm = useForm<BulkValues>({
     resolver: zodResolver(bulkSchema),
     defaultValues: {
-      campaign: initialCampaignId ? Number(initialCampaignId) : 0,
+      campaign: initialCampaignId,
     },
   });
 
@@ -162,7 +166,7 @@ export function ContactsPageClient({
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (contactId: number) =>
+    mutationFn: (contactId: EntityId) =>
       apiRequest<void>(`/api/backend/contacts/${contactId}/`, {
         method: "DELETE",
       }),
@@ -206,7 +210,7 @@ export function ContactsPageClient({
   const openCreate = () => {
     setEditingContact(null);
     form.reset({
-      campaign: filters.campaignId ? Number(filters.campaignId) : 0,
+      campaign: filters.campaignId,
       phone_number: "",
       name: "",
       comments: "",

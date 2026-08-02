@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+from uuid import UUID
 
 from django.db.models import Q
 from django.http import FileResponse, Http404
@@ -232,7 +233,7 @@ class CampaignViewSet(ExternalSessionMixin, viewsets.ModelViewSet):
 
 
 class CampaignActionView(ExternalSessionMixin, APIView):
-    def post(self, request, campaign_id: int, action_name: str):
+    def post(self, request, campaign_id: UUID, action_name: str):
         campaign = Campaign.objects.filter(
             owner=self.get_profile(), pk=campaign_id
         ).first()
@@ -241,7 +242,7 @@ class CampaignActionView(ExternalSessionMixin, APIView):
 
         should_dispatch = apply_campaign_action(campaign, action_name)
         if should_dispatch:
-            dispatch_campaign_calls_task.delay(campaign.id)
+            dispatch_campaign_calls_task.delay(str(campaign.id))
 
         return Response(CampaignSerializer(campaign, context={"request": request}).data)
 
@@ -249,7 +250,7 @@ class CampaignActionView(ExternalSessionMixin, APIView):
 class CampaignAudioView(ExternalSessionMixin, APIView):
     parser_classes = [MultiPartParser, FormParser]  # noqa: RUF012
 
-    def get_campaign(self, campaign_id: int) -> Campaign:
+    def get_campaign(self, campaign_id: UUID) -> Campaign:
         campaign = Campaign.objects.filter(
             owner=self.get_profile(), pk=campaign_id
         ).first()
@@ -257,7 +258,7 @@ class CampaignAudioView(ExternalSessionMixin, APIView):
             raise ValidationError({"detail": "Campaign not found."})
         return campaign
 
-    def get(self, request, campaign_id: int):
+    def get(self, request, campaign_id: UUID):
         campaign = self.get_campaign(campaign_id)
         audio = CampaignAudio.objects.filter(campaign=campaign).first()
         if audio is None:
@@ -266,7 +267,7 @@ class CampaignAudioView(ExternalSessionMixin, APIView):
             {"audio": CampaignAudioSerializer(audio, context={"request": request}).data}
         )
 
-    def post(self, request, campaign_id: int):
+    def post(self, request, campaign_id: UUID):
         campaign = self.get_campaign(campaign_id)
         instance = CampaignAudio.objects.filter(campaign=campaign).first()
         serializer = CampaignAudioSerializer(
@@ -286,7 +287,7 @@ class CampaignAudioView(ExternalSessionMixin, APIView):
             status=status.HTTP_201_CREATED,
         )
 
-    def delete(self, request, campaign_id: int):
+    def delete(self, request, campaign_id: UUID):
         campaign = self.get_campaign(campaign_id)
         audio = CampaignAudio.objects.filter(campaign=campaign).first()
         if audio is None:
@@ -300,7 +301,7 @@ class PublicCampaignAudioPlaybackView(APIView):
     authentication_classes = []  # noqa: RUF012
     permission_classes = []  # noqa: RUF012
 
-    def get(self, request, campaign_id: int, versioned_name: str):
+    def get(self, request, campaign_id: UUID, versioned_name: str):
         audio = CampaignAudio.objects.filter(campaign_id=campaign_id).first()
         if audio is None or not audio.audio_file:
             raise Http404("Campaign audio not found.")
@@ -447,7 +448,7 @@ class CallStateWebhookView(APIView):
             and is_internal_outgoing_leg(normalized_payload)
             and call_log.playback_requested_at is None
         ):
-            play_campaign_audio_task.delay(call_log.pk)
+            play_campaign_audio_task.delay(str(call_log.pk))
         return Response({"success": 1, "call_log_id": call_log.pk})
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from uuid import UUID
 
 from django.conf import settings
 from django.utils import timezone
@@ -66,7 +67,7 @@ def build_versioned_media_url(path: str, version: str | None) -> str:
 
 
 def build_public_playback_audio_url(
-    campaign_id: int, file_name: str, version: str | None
+    campaign_id: UUID | str, file_name: str, version: str | None
 ) -> str:
     extension = Path(file_name).suffix or ".wav"
     version_segment = version or "current"

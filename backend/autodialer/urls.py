@@ -38,17 +38,17 @@ urlpatterns = [
         name="contacts-bulk-upload",
     ),
     path(
-        "campaigns/<int:campaign_id>/audio/",
+        "campaigns/<uuid:campaign_id>/audio/",
         CampaignAudioView.as_view(),
         name="campaign-audio",
     ),
     path(
-        "campaigns/<int:campaign_id>/actions/<str:action_name>/",
+        "campaigns/<uuid:campaign_id>/actions/<str:action_name>/",
         CampaignActionView.as_view(),
         name="campaign-action",
     ),
     path(
-        "campaigns/<int:campaign_id>/calls/", campaign_call_logs, name="campaign-calls"
+        "campaigns/<uuid:campaign_id>/calls/", campaign_call_logs, name="campaign-calls"
     ),
     path(
         "webhooks/calls/state/",
@@ -61,7 +61,7 @@ urlpatterns = [
         name="playback-webhook",
     ),
     path(
-        "public/campaign-audio/<int:campaign_id>/<str:versioned_name>",
+        "public/campaign-audio/<uuid:campaign_id>/<str:versioned_name>",
         PublicCampaignAudioPlaybackView.as_view(),
         name="public-campaign-audio",
     ),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import UUID
 
 from django.conf import settings
 from django.db import transaction
@@ -66,7 +67,7 @@ def sync_customer_profile(
         profile = (
             ExternalUserProfile.objects.select_for_update()
             .filter(Q(username=username) | Q(i_customer=i_customer))
-            .order_by("pk")
+            .order_by("created_at")
             .first()
         )
 
@@ -284,7 +285,7 @@ def maybe_finish_campaign(campaign: Campaign | None) -> None:
         campaign.save(update_fields=["status", "finished_at", "updated_at"])
 
 
-def dispatch_campaign_calls(campaign: Campaign) -> list[int]:
+def dispatch_campaign_calls(campaign: Campaign) -> list[UUID]:
     if campaign.status != Campaign.CampaignStatus.PROCESSING:
         return []
 
@@ -297,14 +298,14 @@ def dispatch_campaign_calls(campaign: Campaign) -> list[int]:
     contacts = list(
         campaign.contacts.filter(
             status__in=[Contact.ContactStatus.NEW, Contact.ContactStatus.ACTIVE]
-        ).order_by("id")[:available_slots]
+        ).order_by("created_at")[:available_slots]
     )
 
     if not contacts:
         maybe_finish_campaign(campaign)
         return []
 
-    dispatched_ids: list[int] = []
+    dispatched_ids: list[UUID] = []
     for contact in contacts:
         call_log = originate_call_for_contact(campaign, contact)
         dispatched_ids.append(call_log.pk)
@@ -326,7 +327,7 @@ def handle_state_webhook(payload: dict[str, Any]) -> CallLog:
             | Q(external_call_id=call_info.get("id"))
             | Q(previous_tracking_id=payload.get("previous_tracking_id"))
         )
-        .order_by("-id")
+        .order_by("-created_at")
         .first()
     )
 
@@ -455,7 +456,7 @@ def handle_playback_webhook(payload: dict[str, Any]) -> CallLog | None:
             Q(tracking_id=tracking_id) | Q(external_call_id=call_info.get("id"))
         )
         .select_related("owner", "campaign")
-        .order_by("-id")
+        .order_by("-created_at")
         .first()
     )
     if call_log is None:

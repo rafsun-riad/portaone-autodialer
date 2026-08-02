@@ -37,8 +37,10 @@ type PaginatedResponse<T> = {
   results: T[];
 };
 
+type EntityId = string;
+
 type Campaign = {
-  id: number;
+  id: EntityId;
   name: string;
   status: string;
   connect_to: string;
@@ -51,7 +53,7 @@ type Campaign = {
   contact_count: number;
   completed_contacts: number;
   audio: {
-    id: number;
+    id: EntityId;
     original_name: string;
     file_url: string;
   } | null;
@@ -65,7 +67,7 @@ type AccountOption = {
 };
 
 type CallLog = {
-  id: number;
+  id: EntityId;
   status: string;
   destination: string;
   duration: number;
@@ -203,7 +205,7 @@ export function CampaignsPageClient() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (campaignId: number) =>
+    mutationFn: (campaignId: EntityId) =>
       apiRequest<void>(`/api/backend/campaigns/${campaignId}/`, {
         method: "DELETE",
       }),
@@ -219,7 +221,7 @@ export function CampaignsPageClient() {
       campaignId,
       action,
     }: {
-      campaignId: number;
+      campaignId: EntityId;
       action: string;
     }) =>
       apiRequest<Campaign>(

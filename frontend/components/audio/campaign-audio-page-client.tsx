@@ -14,12 +14,14 @@ type PaginatedResponse<T> = {
   results: T[];
 };
 
+type EntityId = string;
+
 type Campaign = {
-  id: number;
+  id: EntityId;
   name: string;
   status: string;
   audio: {
-    id: number;
+    id: EntityId;
     original_name: string;
     file_url: string;
   } | null;
@@ -27,7 +29,7 @@ type Campaign = {
 
 type AudioResponse = {
   audio: {
-    id: number;
+    id: EntityId;
     original_name: string;
     file_url: string;
     file_size: number;
@@ -52,7 +54,7 @@ function getPlayableAudioUrl(fileUrl: string) {
 
 export function CampaignAudioPageClient() {
   const queryClient = useQueryClient();
-  const [selectedCampaignId, setSelectedCampaignId] = useState<number | null>(
+  const [selectedCampaignId, setSelectedCampaignId] = useState<EntityId | null>(
     null,
   );
   const [notice, setNotice] = useState<string | null>(null);
