@@ -455,9 +455,9 @@ export function ContactsPageClient({
             <span className="text-sm font-medium text-slate-700">Campaign</span>
             <select
               className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none"
-              {...form.register("campaign", { valueAsNumber: true })}
+              {...form.register("campaign")}
             >
-              <option value="0">Select campaign</option>
+              <option value="">Select campaign</option>
               {campaignsQuery.data?.results.map((campaign) => (
                 <option key={campaign.id} value={campaign.id}>
                   {campaign.name}
@@ -539,9 +539,9 @@ export function ContactsPageClient({
             <span className="text-sm font-medium text-slate-700">Campaign</span>
             <select
               className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none"
-              {...bulkForm.register("campaign", { valueAsNumber: true })}
+              {...bulkForm.register("campaign")}
             >
-              <option value="0">Select campaign</option>
+              <option value="">Select campaign</option>
               {campaignsQuery.data?.results.map((campaign) => (
                 <option key={campaign.id} value={campaign.id}>
                   {campaign.name}
