@@ -25,3 +25,11 @@ export function formatDhakaDateTime(value?: string | null) {
 
   return formatInTimeZone(value, APP_TIMEZONE, "dd MMM yyyy, hh:mm a");
 }
+
+export function formatDhakaDateTimeWithSeconds(value?: string | null) {
+  if (!value) {
+    return "-";
+  }
+
+  return formatInTimeZone(value, APP_TIMEZONE, "dd MMM yyyy, hh:mm:ss a");
+}

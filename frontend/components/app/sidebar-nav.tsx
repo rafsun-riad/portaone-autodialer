@@ -2,6 +2,7 @@
 
 import {
   BarChart3,
+  ClipboardList,
   ContactRound,
   LayoutDashboard,
   Music4,
@@ -15,6 +16,7 @@ const iconMap = {
   campaigns: BarChart3,
   contacts: ContactRound,
   audio: Music4,
+  callLogs: ClipboardList,
 } satisfies Record<string, LucideIcon>;
 
 type NavigationItem = {

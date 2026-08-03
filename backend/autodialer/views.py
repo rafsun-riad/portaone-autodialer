@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Iterable
 from uuid import UUID
 
-from django.db.models import Q
+from django.db.models import Case, CharField, Q, Value, When
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -24,14 +25,17 @@ from autodialer.models import (
 from autodialer.serializers import (
     CallLogSerializer,
     CampaignAudioSerializer,
+    CampaignRestartSerializer,
     CampaignSerializer,
     ChangePasswordSerializer,
     ContactSerializer,
     LoginSerializer,
+    serialize_campaign_call_log_summary,
 )
 from autodialer.services.external_api import ExternalSystemClient, ExternalSystemError
 from autodialer.services.webhook_logs import append_webhook_payload
 from autodialer.services.workflows import (
+    ACTIVE_CALL_STATES,
     apply_campaign_action,
     handle_playback_webhook,
     handle_state_webhook,
@@ -53,6 +57,54 @@ class ContactPagination(PageNumberPagination):
     page_size = 100
     page_size_query_param = "page_size"
     max_page_size = 500
+
+
+class CallLogPagination(PageNumberPagination):
+    page_size = 100
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+CALL_STATUS_SUCCESS = "success"
+CALL_STATUS_INVALID_NUMBER = "invalid_number"
+CALL_STATUS_NOT_ANSWERED = "not_answered"
+CALL_STATUS_OTHER = "other"
+
+SUCCESS_REASONS = [
+    "Answer Leg Disconnected Via Call Control API",
+    "BYE Received",
+]
+INVALID_NUMBER_REASONS = ["Relayed Response: Auth Failed", "Auth Failed"]
+
+
+def build_derived_status_expression() -> Case:
+    return Case(
+        When(
+            Q(reason__in=SUCCESS_REASONS) & Q(reason_code=487) & Q(duration__gt=0),
+            then=Value(CALL_STATUS_SUCCESS),
+        ),
+        When(
+            Q(reason="Temporarily Unavailable") & Q(reason_code=480) & Q(duration=0),
+            then=Value(CALL_STATUS_NOT_ANSWERED),
+        ),
+        When(
+            Q(reason__in=INVALID_NUMBER_REASONS) & Q(reason_code=403) & Q(duration=0),
+            then=Value(CALL_STATUS_INVALID_NUMBER),
+        ),
+        default=Value(CALL_STATUS_OTHER),
+        output_field=CharField(),
+    )
+
+
+def collect_latest_contact_statuses(call_logs: Iterable[CallLog]) -> dict[str, str]:
+    latest_statuses: dict[str, str] = {}
+    for call_log in call_logs:
+        if call_log.contact_id is None or call_log.contact_id in latest_statuses:
+            continue
+        latest_statuses[call_log.contact_id] = getattr(
+            call_log, "derived_status", CALL_STATUS_OTHER
+        )
+    return latest_statuses
 
 
 class ExternalSessionMixin:
@@ -419,15 +471,215 @@ class CampaignCallLogView(
     ExternalSessionMixin, mixins.ListModelMixin, viewsets.GenericViewSet
 ):
     serializer_class = CallLogSerializer
-    pagination_class = CampaignPagination
+    pagination_class = CallLogPagination
+
+    def get_campaign(self) -> Campaign:
+        profile = self.get_profile()
+        campaign = Campaign.objects.filter(
+            owner=profile, pk=self.kwargs["campaign_id"]
+        ).first()
+        if campaign is None:
+            raise ValidationError({"detail": "Campaign not found."})
+        return campaign
 
     def get_queryset(self):
         profile = self.get_profile()
         campaign_id = self.kwargs["campaign_id"]
-        return (
+        queryset = (
             CallLog.objects.filter(owner=profile, campaign_id=campaign_id)
-            .select_related("contact")
+            .select_related("contact", "campaign")
+            .annotate(derived_status=build_derived_status_expression())
             .order_by("-created_at")
+        )
+
+        search = self.request.query_params.get("search", "").strip()
+        current_status = self.request.query_params.get("current_status", "").strip()
+        derived_status = self.request.query_params.get("derived_status", "").strip()
+
+        if search:
+            queryset = queryset.filter(
+                Q(destination__icontains=search)
+                | Q(contact__phone_number__icontains=search)
+            )
+        if current_status:
+            queryset = queryset.filter(status=current_status)
+        if derived_status:
+            queryset = queryset.filter(derived_status=derived_status)
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        campaign = self.get_campaign()
+        queryset = self.filter_queryset(self.get_queryset())
+        summary_queryset = (
+            CallLog.objects.filter(owner=self.get_profile(), campaign=campaign)
+            .annotate(derived_status=build_derived_status_expression())
+            .order_by("-created_at")
+        )
+        classified_total = summary_queryset.exclude(
+            derived_status=CALL_STATUS_OTHER
+        ).count()
+        success_count = summary_queryset.filter(
+            derived_status=CALL_STATUS_SUCCESS
+        ).count()
+        invalid_number_count = summary_queryset.filter(
+            derived_status=CALL_STATUS_INVALID_NUMBER
+        ).count()
+        not_answered_count = summary_queryset.filter(
+            derived_status=CALL_STATUS_NOT_ANSWERED
+        ).count()
+
+        if classified_total:
+            success_rate = round(success_count / classified_total * 100, 2)
+            invalid_number_rate = round(
+                invalid_number_count / classified_total * 100, 2
+            )
+            not_answered_rate = round(not_answered_count / classified_total * 100, 2)
+        else:
+            success_rate = 0.0
+            invalid_number_rate = 0.0
+            not_answered_rate = 0.0
+
+        summary = serialize_campaign_call_log_summary(
+            campaign=campaign,
+            filters={
+                "search": request.query_params.get("search", "").strip(),
+                "current_status": request.query_params.get(
+                    "current_status", ""
+                ).strip(),
+                "derived_status": request.query_params.get(
+                    "derived_status", ""
+                ).strip(),
+            },
+            counts={
+                "ongoing_calls": campaign.call_logs.filter(
+                    status__in=ACTIVE_CALL_STATES
+                ).count(),
+                "contact_count": campaign.contacts.count(),
+                "completed_calls": classified_total,
+                "success_calls": success_count,
+                "invalid_number_calls": invalid_number_count,
+                "not_answered_calls": not_answered_count,
+            },
+            rates={
+                "success_rate": success_rate,
+                "invalid_number_rate": invalid_number_rate,
+                "not_answered_rate": not_answered_rate,
+            },
+        )
+
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page or queryset, many=True)
+        if page is not None:
+            paginated = self.get_paginated_response(serializer.data)
+            paginated.data["summary"] = summary
+            return paginated
+
+        return Response({"results": serializer.data, "summary": summary})
+
+
+class CampaignRestartView(ExternalSessionMixin, APIView):
+    def get_campaign(self, campaign_id: UUID) -> Campaign:
+        campaign = Campaign.objects.filter(
+            owner=self.get_profile(), pk=campaign_id
+        ).first()
+        if campaign is None:
+            raise ValidationError({"detail": "Campaign not found."})
+        return campaign
+
+    def post(self, request, campaign_id: UUID):
+        campaign = self.get_campaign(campaign_id)
+        serializer = CampaignRestartSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        restart_scope = serializer.validated_data["restart_scope"]
+        run_mode = serializer.validated_data["run_mode"]
+        scheduled_at = serializer.validated_data.get("scheduled_at")
+        now = timezone.now()
+
+        latest_logs = (
+            campaign.call_logs.filter(contact_id__isnull=False)
+            .annotate(derived_status=build_derived_status_expression())
+            .order_by("contact_id", "-created_at")
+        )
+        latest_statuses = collect_latest_contact_statuses(latest_logs)
+
+        selected_contact_ids: list[str] = []
+        invalid_contact_ids: list[str] = []
+        paused_contact_ids: list[str] = []
+        all_contact_ids = list(campaign.contacts.values_list("id", flat=True))
+
+        for contact_id in all_contact_ids:
+            derived_status = latest_statuses.get(contact_id, CALL_STATUS_OTHER)
+            include_contact = False
+            if restart_scope == "all":
+                include_contact = True
+            elif restart_scope == "not_answered":
+                include_contact = derived_status == CALL_STATUS_NOT_ANSWERED
+            elif restart_scope == "exclude_invalid":
+                include_contact = derived_status != CALL_STATUS_INVALID_NUMBER
+
+            if include_contact:
+                selected_contact_ids.append(contact_id)
+            elif derived_status == CALL_STATUS_INVALID_NUMBER:
+                invalid_contact_ids.append(contact_id)
+            else:
+                paused_contact_ids.append(contact_id)
+
+        if not selected_contact_ids:
+            raise ValidationError(
+                {"detail": "No contacts match the selected restart scope."}
+            )
+
+        reset_campaign_runtime_state(campaign, reset_contacts=False, now=now)
+        campaign.contacts.filter(pk__in=selected_contact_ids).update(
+            status=Contact.ContactStatus.NEW,
+            updated_at=now,
+        )
+        if invalid_contact_ids:
+            campaign.contacts.filter(pk__in=invalid_contact_ids).update(
+                status=Contact.ContactStatus.INVALID,
+                updated_at=now,
+            )
+        if paused_contact_ids:
+            campaign.contacts.filter(pk__in=paused_contact_ids).update(
+                status=Contact.ContactStatus.PAUSED,
+                updated_at=now,
+            )
+
+        if run_mode == "scheduled":
+            campaign.status = Campaign.CampaignStatus.SCHEDULED
+            campaign.scheduled_at = scheduled_at
+            campaign.started_at = None
+        else:
+            campaign.status = Campaign.CampaignStatus.PROCESSING
+            campaign.scheduled_at = None
+            campaign.started_at = now
+
+        campaign.finished_at = None
+        campaign.paused_at = None
+        campaign.last_dispatched_at = None
+        campaign.save(
+            update_fields=[
+                "status",
+                "scheduled_at",
+                "started_at",
+                "finished_at",
+                "paused_at",
+                "last_dispatched_at",
+                "updated_at",
+            ]
+        )
+
+        if run_mode == "immediate":
+            dispatch_campaign_calls_task.delay(str(campaign.id))
+
+        return Response(
+            {
+                "campaign": CampaignSerializer(
+                    campaign, context={"request": request}
+                ).data,
+                "selected_contact_count": len(selected_contact_ids),
+            }
         )
 
 

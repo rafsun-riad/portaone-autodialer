@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -163,15 +165,27 @@ class ContactSerializer(serializers.ModelSerializer):
 
 class CallLogSerializer(serializers.ModelSerializer):
     contact_name = serializers.CharField(source="contact.name", read_only=True)
+    campaign_name = serializers.CharField(source="campaign.name", read_only=True)
+    campaign_started_at = serializers.DateTimeField(
+        source="campaign.started_at", read_only=True
+    )
+    campaign_finished_at = serializers.DateTimeField(
+        source="campaign.finished_at", read_only=True
+    )
+    derived_status = serializers.SerializerMethodField()
 
     class Meta:
         model = CallLog
         fields = [  # noqa: RUF012
             "id",
+            "campaign_name",
+            "campaign_started_at",
+            "campaign_finished_at",
             "tracking_id",
             "external_call_id",
             "call_tag",
             "status",
+            "derived_status",
             "account_id",
             "caller_id",
             "destination",
@@ -189,3 +203,78 @@ class CallLogSerializer(serializers.ModelSerializer):
             "response_payload",
             "webhook_payload",
         ]
+
+    def get_derived_status(self, obj: CallLog) -> str:
+        annotated_status = getattr(obj, "derived_status", None)
+        if annotated_status:
+            return annotated_status
+        status_resolver = self.context.get("call_status_resolver")
+        if callable(status_resolver):
+            return status_resolver(obj)
+        return "other"
+
+
+class CampaignRestartSerializer(serializers.Serializer):
+    restart_scope = serializers.ChoiceField(
+        choices=[
+            ("all", "All numbers"),
+            ("not_answered", "Only not answered numbers"),
+            ("exclude_invalid", "All numbers except invalid"),
+        ]
+    )
+    run_mode = serializers.ChoiceField(
+        choices=[("immediate", "Immediate"), ("scheduled", "Scheduled")]
+    )
+    scheduled_at = serializers.DateTimeField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        run_mode = attrs["run_mode"]
+        scheduled_at = attrs.get("scheduled_at")
+        if run_mode == "scheduled":
+            if scheduled_at is None:
+                raise serializers.ValidationError(
+                    {"scheduled_at": "Scheduled time is required."}
+                )
+            if timezone.is_naive(scheduled_at):
+                scheduled_at = timezone.make_aware(
+                    scheduled_at, timezone.get_default_timezone()
+                )
+                attrs["scheduled_at"] = scheduled_at
+            if scheduled_at <= timezone.now():
+                raise serializers.ValidationError(
+                    {"scheduled_at": "Scheduled time must be in the future."}
+                )
+        elif scheduled_at is not None:
+            attrs["scheduled_at"] = None
+
+        return attrs
+
+
+class CampaignCallLogSummarySerializer(serializers.Serializer):
+    campaign = serializers.DictField()
+    filters = serializers.DictField()
+    counts = serializers.DictField()
+    rates = serializers.DictField()
+
+
+def serialize_campaign_call_log_summary(
+    *,
+    campaign: Campaign,
+    filters: Mapping[str, str],
+    counts: Mapping[str, int],
+    rates: Mapping[str, float],
+) -> dict[str, object]:
+    return CampaignCallLogSummarySerializer(
+        {
+            "campaign": {
+                "id": str(campaign.id),
+                "name": campaign.name,
+                "status": campaign.status,
+                "started_at": campaign.started_at,
+                "finished_at": campaign.finished_at,
+            },
+            "filters": dict(filters),
+            "counts": dict(counts),
+            "rates": dict(rates),
+        }
+    ).data

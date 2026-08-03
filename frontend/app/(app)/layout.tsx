@@ -11,12 +11,13 @@ import { type SessionUser } from "@/stores/app-store";
 const navigation: Array<{
   href: string;
   label: string;
-  icon: "dashboard" | "campaigns" | "contacts" | "audio";
+  icon: "dashboard" | "campaigns" | "contacts" | "audio" | "callLogs";
 }> = [
   { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { href: "/campaigns", label: "Campaigns", icon: "campaigns" },
   { href: "/contacts", label: "Contacts", icon: "contacts" },
   { href: "/audio", label: "Campaign Audio", icon: "audio" },
+  { href: "/call-logs", label: "Call Logs", icon: "callLogs" },
 ];
 
 type MeResponse = {

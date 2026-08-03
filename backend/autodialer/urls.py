@@ -8,6 +8,7 @@ from autodialer.views import (
     CampaignActionView,
     CampaignAudioView,
     CampaignCallLogView,
+    CampaignRestartView,
     CampaignViewSet,
     ChangePasswordView,
     ContactViewSet,
@@ -49,6 +50,11 @@ urlpatterns = [
     ),
     path(
         "campaigns/<uuid:campaign_id>/calls/", campaign_call_logs, name="campaign-calls"
+    ),
+    path(
+        "campaigns/<uuid:campaign_id>/restart/",
+        CampaignRestartView.as_view(),
+        name="campaign-restart",
     ),
     path(
         "webhooks/calls/state/",
