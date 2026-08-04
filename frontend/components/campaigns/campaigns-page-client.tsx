@@ -10,7 +10,6 @@ import {
   PhoneCall,
   Play,
   Plus,
-  RotateCcw,
   Search,
   Square,
   Trash2,
@@ -257,7 +256,6 @@ export function CampaignsPageClient() {
         ),
         canPause: selectedCampaign.status === "processing",
         canResume: selectedCampaign.status === "paused",
-        canRestart: ["finished", "canceled"].includes(selectedCampaign.status),
         canStop: [
           "new",
           "scheduled",
@@ -270,7 +268,6 @@ export function CampaignsPageClient() {
         canStart: false,
         canPause: false,
         canResume: false,
-        canRestart: false,
         canStop: false,
       };
 
@@ -750,19 +747,6 @@ export function CampaignsPageClient() {
                       }
                     >
                       <PhoneCall className="size-4" /> Resume
-                    </Button>
-                  ) : null}
-                  {actionVisibility.canRestart ? (
-                    <Button
-                      variant="secondary"
-                      onPress={() =>
-                        actionMutation.mutate({
-                          campaignId: selectedCampaign.id,
-                          action: "restart",
-                        })
-                      }
-                    >
-                      <RotateCcw className="size-4" /> Restart
                     </Button>
                   ) : null}
                   {actionVisibility.canStop ? (
