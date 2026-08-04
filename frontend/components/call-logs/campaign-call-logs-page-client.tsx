@@ -30,6 +30,7 @@ import { apiRequest } from "@/lib/client-api";
 import {
   formatDhakaDateTime,
   formatDhakaDateTimeWithSeconds,
+  formatDhakaReceivedCallLogTime,
   fromDhakaInputValue,
 } from "@/lib/time";
 
@@ -742,7 +743,7 @@ export function CampaignCallLogsPageClient() {
                       {log.reason_code ?? "-"}
                     </td>
                     <td className="border-b border-slate-100 px-4 py-3">
-                      {formatDhakaDateTimeWithSeconds(log.connect_time)}
+                      {formatDhakaReceivedCallLogTime(log.connect_time)}
                     </td>
                     <td className="border-b border-slate-100 px-4 py-3">
                       {formatDuration(log.duration)}
