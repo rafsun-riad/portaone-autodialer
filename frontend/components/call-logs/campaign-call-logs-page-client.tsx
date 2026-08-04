@@ -11,9 +11,13 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Pause,
+  PhoneCall,
   PhoneMissed,
+  Play,
   RotateCcw,
   Search,
+  Square,
   Users,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -197,16 +201,13 @@ function RateBar({
   );
 }
 
-export function CampaignCallLogsPageClient({
-  initialCampaignId,
-}: {
-  initialCampaignId: string;
-}) {
+export function CampaignCallLogsPageClient() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [isNavigating, startTransition] = useTransition();
-  const [selectedCampaignId, setSelectedCampaignId] =
-    useState(initialCampaignId);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
+    null,
+  );
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [currentStatus, setCurrentStatus] = useState("");
@@ -242,11 +243,7 @@ export function CampaignCallLogsPageClient({
     refetchIntervalInBackground: true,
   });
 
-  const activeCampaignId =
-    selectedCampaignId ||
-    initialCampaignId ||
-    campaignsQuery.data?.results[0]?.id ||
-    null;
+  const activeCampaignId = selectedCampaignId;
 
   const callLogsQuery = useQuery({
     queryKey: [
@@ -328,19 +325,65 @@ export function CampaignCallLogsPageClient({
     },
   });
 
-  useEffect(() => {
-    if (!activeCampaignId) {
-      return;
-    }
+  const actionMutation = useMutation({
+    mutationFn: ({
+      campaignId,
+      action,
+    }: {
+      campaignId: EntityId;
+      action: "pause" | "resume" | "stop";
+    }) =>
+      apiRequest<CampaignOption>(
+        `/api/backend/campaigns/${campaignId}/actions/${action}/`,
+        {
+          method: "POST",
+        },
+      ),
+    onSuccess: (campaign, values) => {
+      setNotice(`Campaign ${campaign.status}.`);
+      queryClient.invalidateQueries({ queryKey: ["call-log-campaigns"] });
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      queryClient.invalidateQueries({
+        queryKey: ["campaign-call-logs", values.campaignId],
+      });
+    },
+    onError: (error) => {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Unable to perform that campaign action.",
+      );
+    },
+  });
 
+  useEffect(() => {
     startTransition(() => {
-      router.replace(`/call-logs?campaignId=${activeCampaignId}`);
+      router.replace(
+        activeCampaignId
+          ? `/call-logs?campaignId=${activeCampaignId}`
+          : "/call-logs",
+      );
     });
   }, [activeCampaignId, router]);
 
   const selectedCampaign = campaignsQuery.data?.results.find(
     (campaign) => campaign.id === activeCampaignId,
   );
+  const actionVisibility = selectedCampaign
+    ? {
+        canPause: selectedCampaign.status === "processing",
+        canResume: selectedCampaign.status === "paused",
+        canRestart: ["finished", "canceled"].includes(selectedCampaign.status),
+        canStop: ["scheduled", "overdue", "processing", "paused"].includes(
+          selectedCampaign.status,
+        ),
+      }
+    : {
+        canPause: false,
+        canResume: false,
+        canRestart: false,
+        canStop: false,
+      };
   const summary = callLogsQuery.data?.summary;
   const pageCount = Math.max(
     1,
@@ -366,13 +409,66 @@ export function CampaignCallLogsPageClient({
             <Download className="size-4" />
             Export CSV
           </Button>
-          <Button
-            onPress={() => setRestartOpen(true)}
-            isDisabled={!activeCampaignId || restartMutation.isPending}
-          >
-            <RotateCcw className="size-4" />
-            Restart campaign
-          </Button>
+          {actionVisibility.canPause ? (
+            <Button
+              variant="secondary"
+              onPress={() =>
+                activeCampaignId
+                  ? actionMutation.mutate({
+                      campaignId: activeCampaignId,
+                      action: "pause",
+                    })
+                  : null
+              }
+              isDisabled={!activeCampaignId || actionMutation.isPending}
+            >
+              <Pause className="size-4" />
+              Pause
+            </Button>
+          ) : null}
+          {actionVisibility.canResume ? (
+            <Button
+              variant="secondary"
+              onPress={() =>
+                activeCampaignId
+                  ? actionMutation.mutate({
+                      campaignId: activeCampaignId,
+                      action: "resume",
+                    })
+                  : null
+              }
+              isDisabled={!activeCampaignId || actionMutation.isPending}
+            >
+              <PhoneCall className="size-4" />
+              Resume
+            </Button>
+          ) : null}
+          {actionVisibility.canRestart ? (
+            <Button
+              onPress={() => setRestartOpen(true)}
+              isDisabled={!activeCampaignId || restartMutation.isPending}
+            >
+              <RotateCcw className="size-4" />
+              Restart campaign
+            </Button>
+          ) : null}
+          {actionVisibility.canStop ? (
+            <Button
+              variant="danger"
+              onPress={() =>
+                activeCampaignId
+                  ? actionMutation.mutate({
+                      campaignId: activeCampaignId,
+                      action: "stop",
+                    })
+                  : null
+              }
+              isDisabled={!activeCampaignId || actionMutation.isPending}
+            >
+              <Square className="size-4" />
+              Stop
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -390,7 +486,7 @@ export function CampaignCallLogsPageClient({
               className="dashboard-input-shell w-full rounded-2xl px-4 py-3 outline-none"
               value={activeCampaignId ?? ""}
               onChange={(event) => {
-                setSelectedCampaignId(event.target.value);
+                setSelectedCampaignId(event.target.value || null);
                 setPage(1);
               }}
             >
@@ -458,6 +554,23 @@ export function CampaignCallLogsPageClient({
         </div>
       </section>
 
+      {!activeCampaignId ? (
+        <section className="dashboard-panel p-8 text-center">
+          <div className="mx-auto max-w-2xl space-y-3">
+            <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-slate-100 text-slate-500">
+              <Play className="size-5" />
+            </div>
+            <h2 className="text-2xl font-semibold text-slate-950">
+              Select a campaign to view call logs
+            </h2>
+            <p className="text-sm leading-7 text-slate-600">
+              Choose a campaign from the filter above to load call metrics,
+              outcome rates, and campaign controls.
+            </p>
+          </div>
+        </section>
+      ) : null}
+
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="dashboard-stat-card">
           <div className="dashboard-stat-icon bg-[linear-gradient(135deg,#0f766e,#14b8a6)] text-white">
@@ -504,7 +617,9 @@ export function CampaignCallLogsPageClient({
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
             {formatLabel(
-              summary?.campaign.status ?? selectedCampaign?.status ?? "new",
+              summary?.campaign.status ??
+                selectedCampaign?.status ??
+                "not_selected",
             )}
           </h2>
         </div>
