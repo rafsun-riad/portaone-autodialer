@@ -168,6 +168,91 @@ class Contact(TimestampedModel):
         return f"{self.name} ({self.phone_number})"
 
 
+def contact_import_upload_to(instance: ContactImportJob, filename: str) -> str:
+    parsed_name = Path(filename)
+    extension = parsed_name.suffix.lower()
+    safe_stem = get_valid_filename(parsed_name.stem) or f"contact_import_{instance.id}"
+    return (
+        "contact-imports/"
+        f"{instance.owner.username}/{instance.campaign_id}/{instance.id}/"
+        f"{safe_stem}{extension}"
+    )
+
+
+class ContactImportJob(TimestampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PREPARING = "preparing", "Preparing"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELED = "canceled", "Canceled"
+
+    owner = models.ForeignKey(
+        ExternalUserProfile,
+        on_delete=models.CASCADE,
+        related_name="contact_import_jobs",
+    )
+    campaign = models.ForeignKey(
+        Campaign,
+        on_delete=models.CASCADE,
+        related_name="contact_import_jobs",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    csv_file = models.FileField(
+        upload_to=contact_import_upload_to,
+        max_length=255,
+    )
+    original_filename = models.CharField(max_length=255, blank=True)
+    total_rows = models.PositiveIntegerField(default=0)
+    processed_rows = models.PositiveIntegerField(default=0)
+    created_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    cancel_requested = models.BooleanField(default=False)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]  # noqa: RUF012
+        indexes = [  # noqa: RUF012
+            models.Index(fields=["owner", "status"]),
+            models.Index(fields=["owner", "campaign", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Import {self.id} for {self.campaign}"
+
+
+class ContactImportFailure(TimestampedModel):
+    job = models.ForeignKey(
+        ContactImportJob,
+        on_delete=models.CASCADE,
+        related_name="failures",
+    )
+    row_number = models.PositiveIntegerField()
+    phone_number = models.CharField(max_length=32, blank=True)
+    row_data = models.JSONField(default=dict, blank=True)
+    failure_reason = models.TextField()
+
+    class Meta:
+        ordering = ["row_number", "created_at"]  # noqa: RUF012
+        constraints = [  # noqa: RUF012
+            models.UniqueConstraint(
+                fields=["job", "row_number"],
+                name="unique_contact_import_failure_row",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Import failure row {self.row_number}"
+
+
 class CallLog(TimestampedModel):
     owner = models.ForeignKey(
         ExternalUserProfile,

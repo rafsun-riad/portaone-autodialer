@@ -5,8 +5,24 @@ from collections.abc import Mapping
 from django.utils import timezone
 from rest_framework import serializers
 
-from autodialer.models import CallLog, Campaign, CampaignAudio, Contact
+from autodialer.models import (
+    CallLog,
+    Campaign,
+    CampaignAudio,
+    Contact,
+    ContactImportFailure,
+    ContactImportJob,
+)
 from autodialer.utils import build_versioned_media_url, normalize_bangladesh_number
+
+
+def validate_contact_phone_number(value: str) -> str:
+    normalized = normalize_bangladesh_number(value)
+    if not normalized:
+        raise serializers.ValidationError("Phone number is required.")
+    if not normalized.isdigit():
+        raise serializers.ValidationError("Phone number must contain digits only.")
+    return normalized
 
 
 class LoginSerializer(serializers.Serializer):
@@ -149,10 +165,7 @@ class ContactSerializer(serializers.ModelSerializer):
         ]
 
     def validate_phone_number(self, value: str) -> str:
-        normalized = normalize_bangladesh_number(value)
-        if not normalized:
-            raise serializers.ValidationError("Phone number is required.")
-        return normalized
+        return validate_contact_phone_number(value)
 
     def validate_campaign(self, value: Campaign) -> Campaign:
         profile = self.context["profile"]
@@ -161,6 +174,66 @@ class ContactSerializer(serializers.ModelSerializer):
                 "Selected campaign does not belong to the current user."
             )
         return value
+
+
+class ContactImportRowSerializer(serializers.Serializer):
+    phone_number = serializers.CharField()
+    name = serializers.CharField(max_length=255)
+    comments = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    status = serializers.ChoiceField(
+        choices=Contact.ContactStatus.choices,
+        required=False,
+        default=Contact.ContactStatus.NEW,
+    )
+
+    def validate_phone_number(self, value: str) -> str:
+        return validate_contact_phone_number(value)
+
+
+class ContactImportFailureSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactImportFailure
+        fields = [  # noqa: RUF012
+            "id",
+            "row_number",
+            "phone_number",
+            "failure_reason",
+            "row_data",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ContactImportJobSerializer(serializers.ModelSerializer):
+    campaign_name = serializers.CharField(source="campaign.name", read_only=True)
+    progress_percent = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ContactImportJob
+        fields = [  # noqa: RUF012
+            "id",
+            "campaign",
+            "campaign_name",
+            "status",
+            "original_filename",
+            "total_rows",
+            "processed_rows",
+            "created_count",
+            "failed_count",
+            "cancel_requested",
+            "error_message",
+            "started_at",
+            "completed_at",
+            "progress_percent",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_progress_percent(self, obj: ContactImportJob) -> int:
+        if obj.total_rows <= 0:
+            return 0
+        return round(obj.processed_rows / obj.total_rows * 100)
 
 
 class CallLogSerializer(serializers.ModelSerializer):

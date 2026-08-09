@@ -1,14 +1,419 @@
 from __future__ import annotations
 
+import csv
+from collections.abc import Mapping
+from dataclasses import dataclass
+from io import TextIOWrapper
+from typing import Any
+
 from celery import shared_task
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from autodialer.models import Campaign, Contact
+from autodialer.models import Campaign, Contact, ContactImportFailure, ContactImportJob
+from autodialer.serializers import ContactImportRowSerializer
 from autodialer.services.workflows import (
     dispatch_campaign_calls,
     maybe_finish_campaign,
     play_campaign_audio,
 )
+
+CONTACT_IMPORT_BATCH_SIZE = 1000
+CONTACT_IMPORT_DUPLICATE_REASON = (
+    "Duplicate phone number already exists in this campaign."
+)
+
+
+@dataclass(slots=True)
+class PreparedContactRow:
+    row_number: int
+    phone_number: str
+    name: str
+    comments: str
+    status: str
+    row_data: dict[str, Any]
+
+
+def _serialize_import_errors(error_data: Any) -> str:
+    if isinstance(error_data, Mapping):
+        messages = []
+        for key, value in error_data.items():
+            nested_message = _serialize_import_errors(value)
+            if nested_message:
+                messages.append(f"{key}: {nested_message}")
+        return "; ".join(messages)
+    if isinstance(error_data, list):
+        return "; ".join(
+            message
+            for message in (_serialize_import_errors(item) for item in error_data)
+            if message
+        )
+    return str(error_data).strip()
+
+
+def _normalize_import_row(row: dict[str, Any]) -> dict[str, Any]:
+    normalized_row: dict[str, Any] = {}
+    for key, value in row.items():
+        if key is None:
+            continue
+        cleaned_key = str(key).strip()
+        if not cleaned_key:
+            continue
+        if isinstance(value, str):
+            normalized_row[cleaned_key] = value.strip()
+        else:
+            normalized_row[cleaned_key] = value
+    return normalized_row
+
+
+def _build_import_failure(
+    *,
+    job: ContactImportJob,
+    row_number: int,
+    phone_number: str,
+    row_data: dict[str, Any],
+    reason: str,
+) -> ContactImportFailure:
+    return ContactImportFailure(
+        job=job,
+        row_number=row_number,
+        phone_number=phone_number,
+        row_data=row_data,
+        failure_reason=reason,
+    )
+
+
+def _refresh_job(job: ContactImportJob) -> ContactImportJob:
+    job.refresh_from_db(
+        fields=[
+            "status",
+            "cancel_requested",
+            "processed_rows",
+            "created_count",
+            "failed_count",
+            "total_rows",
+        ]
+    )
+    return job
+
+
+def _mark_contact_import_canceled(job: ContactImportJob) -> None:
+    _refresh_job(job)
+    if job.status == ContactImportJob.Status.CANCELED:
+        return
+    job.status = ContactImportJob.Status.CANCELED
+    job.completed_at = timezone.now()
+    job.error_message = ""
+    job.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
+
+
+def _contact_import_canceled(job: ContactImportJob) -> bool:
+    _refresh_job(job)
+    if not job.cancel_requested:
+        return False
+    _mark_contact_import_canceled(job)
+    return True
+
+
+def _create_contacts_for_chunk(
+    *, job: ContactImportJob, prepared_rows: list[PreparedContactRow]
+) -> tuple[int, list[ContactImportFailure]]:
+    if not prepared_rows:
+        return 0, []
+
+    contacts = [
+        Contact(
+            owner=job.owner,
+            campaign=job.campaign,
+            phone_number=prepared_row.phone_number,
+            name=prepared_row.name,
+            comments=prepared_row.comments,
+            status=prepared_row.status,
+        )
+        for prepared_row in prepared_rows
+    ]
+
+    try:
+        with transaction.atomic():
+            Contact.objects.bulk_create(contacts, batch_size=CONTACT_IMPORT_BATCH_SIZE)
+        return len(prepared_rows), []
+    except IntegrityError:
+        created_count = 0
+        race_failures: list[ContactImportFailure] = []
+        for prepared_row in prepared_rows:
+            try:
+                with transaction.atomic():
+                    Contact.objects.create(
+                        owner=job.owner,
+                        campaign=job.campaign,
+                        phone_number=prepared_row.phone_number,
+                        name=prepared_row.name,
+                        comments=prepared_row.comments,
+                        status=prepared_row.status,
+                    )
+                created_count += 1
+            except IntegrityError:
+                race_failures.append(
+                    _build_import_failure(
+                        job=job,
+                        row_number=prepared_row.row_number,
+                        phone_number=prepared_row.phone_number,
+                        row_data=prepared_row.row_data,
+                        reason=CONTACT_IMPORT_DUPLICATE_REASON,
+                    )
+                )
+        return created_count, race_failures
+
+
+def _flush_contact_import_chunk(
+    *,
+    job: ContactImportJob,
+    prepared_rows: list[PreparedContactRow],
+    failures: list[ContactImportFailure],
+    processed_count: int,
+) -> None:
+    existing_numbers: set[str] = set()
+    if prepared_rows:
+        phone_numbers = [prepared_row.phone_number for prepared_row in prepared_rows]
+        existing_numbers = set(
+            Contact.objects.filter(
+                owner=job.owner,
+                campaign=job.campaign,
+                phone_number__in=phone_numbers,
+            ).values_list("phone_number", flat=True)
+        )
+
+    contacts_to_create: list[PreparedContactRow] = []
+    for prepared_row in prepared_rows:
+        if prepared_row.phone_number in existing_numbers:
+            failures.append(
+                _build_import_failure(
+                    job=job,
+                    row_number=prepared_row.row_number,
+                    phone_number=prepared_row.phone_number,
+                    row_data=prepared_row.row_data,
+                    reason=CONTACT_IMPORT_DUPLICATE_REASON,
+                )
+            )
+            continue
+        contacts_to_create.append(prepared_row)
+
+    created_count, race_failures = _create_contacts_for_chunk(
+        job=job,
+        prepared_rows=contacts_to_create,
+    )
+    failures.extend(race_failures)
+
+    if failures:
+        ContactImportFailure.objects.bulk_create(
+            failures,
+            batch_size=CONTACT_IMPORT_BATCH_SIZE,
+        )
+
+    _refresh_job(job)
+    job.processed_rows += processed_count
+    job.created_count += created_count
+    job.failed_count += len(failures)
+    job.save(
+        update_fields=[
+            "processed_rows",
+            "created_count",
+            "failed_count",
+            "updated_at",
+        ]
+    )
+
+
+def _prepare_contact_row(
+    *, job: ContactImportJob, row_number: int, row: dict[str, Any]
+) -> tuple[PreparedContactRow | None, ContactImportFailure | None]:
+    normalized_row = _normalize_import_row(row)
+    serializer = ContactImportRowSerializer(
+        data={
+            "phone_number": normalized_row.get("phone_number", ""),
+            "name": normalized_row.get("name", ""),
+            "comments": normalized_row.get("comments", ""),
+            "status": normalized_row.get("status", Contact.ContactStatus.NEW),
+        }
+    )
+    if not serializer.is_valid():
+        return None, _build_import_failure(
+            job=job,
+            row_number=row_number,
+            phone_number=str(normalized_row.get("phone_number", "")),
+            row_data=normalized_row,
+            reason=_serialize_import_errors(serializer.errors),
+        )
+
+    validated_data = serializer.validated_data
+    return (
+        PreparedContactRow(
+            row_number=row_number,
+            phone_number=validated_data["phone_number"],
+            name=validated_data["name"],
+            comments=validated_data.get("comments") or "",
+            status=validated_data.get("status", Contact.ContactStatus.NEW),
+            row_data=normalized_row,
+        ),
+        None,
+    )
+
+
+def _count_contact_import_rows(job: ContactImportJob) -> int:
+    total_rows = 0
+    with job.csv_file.open("rb") as raw_file:
+        wrapper = TextIOWrapper(raw_file, encoding="utf-8-sig", newline="")
+        reader = csv.DictReader(wrapper)
+        if reader.fieldnames is None or "phone_number" not in reader.fieldnames:
+            raise ValueError("CSV must include a 'phone_number' column.")
+
+        for total_rows, _ in enumerate(reader, start=1):
+            if total_rows % CONTACT_IMPORT_BATCH_SIZE == 0 and _contact_import_canceled(
+                job
+            ):
+                return total_rows
+
+    return total_rows
+
+
+@shared_task(name="autodialer.tasks.process_contact_import_task")
+def process_contact_import_task(job_id: str) -> dict[str, int | str]:
+    job = (
+        ContactImportJob.objects.select_related("owner", "campaign")
+        .filter(pk=job_id)
+        .first()
+    )
+    if job is None:
+        return {"status": ContactImportJob.Status.FAILED}
+
+    now = timezone.now()
+    if job.cancel_requested:
+        _mark_contact_import_canceled(job)
+        return {"status": ContactImportJob.Status.CANCELED}
+
+    job.status = ContactImportJob.Status.PREPARING
+    job.started_at = job.started_at or now
+    job.completed_at = None
+    job.error_message = ""
+    job.save(
+        update_fields=[
+            "status",
+            "started_at",
+            "completed_at",
+            "error_message",
+            "updated_at",
+        ]
+    )
+
+    try:
+        total_rows = _count_contact_import_rows(job)
+        if job.status == ContactImportJob.Status.CANCELED:
+            return {
+                "status": ContactImportJob.Status.CANCELED,
+                "processed_rows": job.processed_rows,
+            }
+
+        _refresh_job(job)
+        job.total_rows = total_rows
+        job.status = ContactImportJob.Status.PROCESSING
+        job.save(update_fields=["total_rows", "status", "updated_at"])
+
+        prepared_rows: list[PreparedContactRow] = []
+        failures: list[ContactImportFailure] = []
+        processed_count = 0
+        local_seen_numbers: set[str] = set()
+
+        with job.csv_file.open("rb") as raw_file:
+            wrapper = TextIOWrapper(raw_file, encoding="utf-8-sig", newline="")
+            reader = csv.DictReader(wrapper)
+
+            for row_number, row in enumerate(reader, start=2):
+                prepared_row, failure = _prepare_contact_row(
+                    job=job,
+                    row_number=row_number,
+                    row=row,
+                )
+                if failure is not None:
+                    failures.append(failure)
+                elif prepared_row is not None:
+                    if prepared_row.phone_number in local_seen_numbers:
+                        failures.append(
+                            _build_import_failure(
+                                job=job,
+                                row_number=prepared_row.row_number,
+                                phone_number=prepared_row.phone_number,
+                                row_data=prepared_row.row_data,
+                                reason=CONTACT_IMPORT_DUPLICATE_REASON,
+                            )
+                        )
+                    else:
+                        local_seen_numbers.add(prepared_row.phone_number)
+                        prepared_rows.append(prepared_row)
+
+                processed_count += 1
+                if processed_count < CONTACT_IMPORT_BATCH_SIZE:
+                    continue
+
+                _flush_contact_import_chunk(
+                    job=job,
+                    prepared_rows=prepared_rows,
+                    failures=failures,
+                    processed_count=processed_count,
+                )
+                prepared_rows = []
+                failures = []
+                processed_count = 0
+                local_seen_numbers = set()
+
+                if _contact_import_canceled(job):
+                    return {
+                        "status": ContactImportJob.Status.CANCELED,
+                        "processed_rows": job.processed_rows,
+                        "created_count": job.created_count,
+                        "failed_count": job.failed_count,
+                    }
+
+        if processed_count:
+            _flush_contact_import_chunk(
+                job=job,
+                prepared_rows=prepared_rows,
+                failures=failures,
+                processed_count=processed_count,
+            )
+
+        if _contact_import_canceled(job):
+            return {
+                "status": ContactImportJob.Status.CANCELED,
+                "processed_rows": job.processed_rows,
+                "created_count": job.created_count,
+                "failed_count": job.failed_count,
+            }
+
+        _refresh_job(job)
+        job.status = ContactImportJob.Status.COMPLETED
+        job.completed_at = timezone.now()
+        job.save(update_fields=["status", "completed_at", "updated_at"])
+        return {
+            "status": ContactImportJob.Status.COMPLETED,
+            "processed_rows": job.processed_rows,
+            "created_count": job.created_count,
+            "failed_count": job.failed_count,
+        }
+    except Exception as exc:
+        _refresh_job(job)
+        if job.status != ContactImportJob.Status.CANCELED:
+            job.status = ContactImportJob.Status.FAILED
+            job.completed_at = timezone.now()
+            job.error_message = str(exc)
+            job.save(
+                update_fields=[
+                    "status",
+                    "completed_at",
+                    "error_message",
+                    "updated_at",
+                ]
+            )
+        raise
 
 
 @shared_task(name="autodialer.tasks.activate_due_campaigns")

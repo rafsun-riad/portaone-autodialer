@@ -20,6 +20,7 @@ from autodialer.models import (
     Campaign,
     CampaignAudio,
     Contact,
+    ContactImportJob,
     ExternalUserProfile,
 )
 from autodialer.serializers import (
@@ -28,6 +29,8 @@ from autodialer.serializers import (
     CampaignRestartSerializer,
     CampaignSerializer,
     ChangePasswordSerializer,
+    ContactImportFailureSerializer,
+    ContactImportJobSerializer,
     ContactSerializer,
     LoginSerializer,
     serialize_campaign_call_log_summary,
@@ -44,7 +47,11 @@ from autodialer.services.workflows import (
     reset_campaign_runtime_state,
     sync_customer_profile,
 )
-from autodialer.tasks import dispatch_campaign_calls_task, play_campaign_audio_task
+from autodialer.tasks import (
+    dispatch_campaign_calls_task,
+    play_campaign_audio_task,
+    process_contact_import_task,
+)
 
 
 class CampaignPagination(PageNumberPagination):
@@ -65,6 +72,12 @@ class CallLogPagination(PageNumberPagination):
     max_page_size = 100
 
 
+class ContactImportFailurePagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+
 CALL_STATUS_SUCCESS = "success"
 CALL_STATUS_INVALID_NUMBER = "invalid_number"
 CALL_STATUS_NOT_ANSWERED = "not_answered"
@@ -75,6 +88,12 @@ SUCCESS_REASONS = [
     "BYE Received",
 ]
 INVALID_NUMBER_REASONS = ["Relayed Response: Auth Failed", "Auth Failed"]
+
+ACTIVE_CONTACT_IMPORT_STATUSES = [
+    ContactImportJob.Status.PENDING,
+    ContactImportJob.Status.PREPARING,
+    ContactImportJob.Status.PROCESSING,
+]
 
 
 def build_derived_status_expression() -> Case:
@@ -419,51 +438,125 @@ class BulkContactUploadView(ExternalSessionMixin, APIView):
         if campaign is None:
             raise ValidationError({"detail": "Campaign not found."})
 
-        decoded_file = upload.read().decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(decoded_file))
-        created_count = 0
-        updated_count = 0
-        errors: list[dict[str, str]] = []
-
-        for row_number, row in enumerate(reader, start=2):
-            serializer = ContactSerializer(
-                data={
-                    "campaign": campaign.id,
-                    "phone_number": row.get("phone_number", ""),
-                    "name": row.get("name", ""),
-                    "comments": row.get("comments", ""),
-                    "status": row.get("status", Contact.ContactStatus.NEW),
-                },
-                context={"profile": profile},
-            )
-            if not serializer.is_valid():
-                errors.append({"row": str(row_number), "errors": serializer.errors})
-                continue
-
-            phone_number = serializer.validated_data["phone_number"]
-            _, created = Contact.objects.update_or_create(
+        active_job = (
+            ContactImportJob.objects.filter(
                 owner=profile,
                 campaign=campaign,
-                phone_number=phone_number,
-                defaults={
-                    "name": serializer.validated_data["name"],
-                    "comments": serializer.validated_data.get("comments", ""),
-                    "status": serializer.validated_data.get(
-                        "status", Contact.ContactStatus.NEW
-                    ),
-                },
+                status__in=ACTIVE_CONTACT_IMPORT_STATUSES,
             )
-            if created:
-                created_count += 1
-            else:
-                updated_count += 1
+            .order_by("-created_at")
+            .first()
+        )
+        if active_job is not None:
+            return Response(
+                {
+                    "detail": "A contact import is already running for this campaign.",
+                    "job": ContactImportJobSerializer(active_job).data,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
+        try:
+            sample = upload.read(8192).decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValidationError(
+                {"detail": "CSV file must be UTF-8 encoded."}
+            ) from exc
+        finally:
+            upload.seek(0)
+
+        reader = csv.DictReader(io.StringIO(sample))
+        if reader.fieldnames is None or "phone_number" not in reader.fieldnames:
+            raise ValidationError(
+                {"detail": "CSV must include a 'phone_number' column."}
+            )
+
+        job = ContactImportJob.objects.create(
+            owner=profile,
+            campaign=campaign,
+            csv_file=upload,
+            original_filename=upload.name,
+        )
+        process_contact_import_task.delay(str(job.id))
+        return Response(
+            ContactImportJobSerializer(job).data, status=status.HTTP_202_ACCEPTED
+        )
+
+
+class ContactImportJobDetailView(ExternalSessionMixin, APIView):
+    def get(self, request, job_id: UUID):
+        job = (
+            ContactImportJob.objects.select_related("campaign")
+            .filter(owner=self.get_profile(), pk=job_id)
+            .first()
+        )
+        if job is None:
+            raise ValidationError({"detail": "Import job not found."})
+        return Response(ContactImportJobSerializer(job).data)
+
+
+class ActiveContactImportJobView(ExternalSessionMixin, APIView):
+    def get(self, request):
+        campaign_id = request.query_params.get("campaign", "").strip()
+        if not campaign_id:
+            raise ValidationError({"campaign": "Campaign is required."})
+
+        job = (
+            ContactImportJob.objects.select_related("campaign")
+            .filter(
+                owner=self.get_profile(),
+                campaign_id=campaign_id,
+                status__in=ACTIVE_CONTACT_IMPORT_STATUSES,
+            )
+            .order_by("-created_at")
+            .first()
+        )
         return Response(
             {
-                "created_count": created_count,
-                "updated_count": updated_count,
-                "errors": errors,
+                "job": ContactImportJobSerializer(job).data if job else None,
             }
+        )
+
+
+class ContactImportFailureListView(ExternalSessionMixin, APIView):
+    pagination_class = ContactImportFailurePagination
+
+    def get(self, request, job_id: UUID):
+        job = ContactImportJob.objects.filter(
+            owner=self.get_profile(), pk=job_id
+        ).first()
+        if job is None:
+            raise ValidationError({"detail": "Import job not found."})
+
+        queryset = job.failures.order_by("row_number", "created_at")
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = ContactImportFailureSerializer(page or queryset, many=True)
+        if page is not None:
+            return paginator.get_paginated_response(serializer.data)
+        return Response({"results": serializer.data})
+
+
+class CancelContactImportJobView(ExternalSessionMixin, APIView):
+    def post(self, request, job_id: UUID):
+        job = ContactImportJob.objects.filter(
+            owner=self.get_profile(), pk=job_id
+        ).first()
+        if job is None:
+            raise ValidationError({"detail": "Import job not found."})
+        if job.status in [
+            ContactImportJob.Status.COMPLETED,
+            ContactImportJob.Status.FAILED,
+            ContactImportJob.Status.CANCELED,
+        ]:
+            raise ValidationError(
+                {"detail": f"Cannot cancel a job in '{job.status}' status."}
+            )
+
+        job.cancel_requested = True
+        job.save(update_fields=["cancel_requested", "updated_at"])
+        return Response(
+            ContactImportJobSerializer(job).data, status=status.HTTP_202_ACCEPTED
         )
 
 
