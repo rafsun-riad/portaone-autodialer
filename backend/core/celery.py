@@ -19,4 +19,8 @@ app.conf.beat_schedule = {
         "task": "autodialer.tasks.pump_processing_campaigns",
         "schedule": 60.0,
     },
+    "cleanup-stale-contact-import-files-every-5-minutes": {
+        "task": "autodialer.tasks.cleanup_stale_contact_import_csv_files",
+        "schedule": 300.0,
+    },
 }

@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 from datetime import timedelta
@@ -16,7 +17,11 @@ from autodialer.models import (
     ContactImportJob,
     ExternalUserProfile,
 )
-from autodialer.tasks import process_contact_import_task
+from autodialer.tasks import (
+    cleanup_contact_import_csv_file_task,
+    cleanup_stale_contact_import_csv_files,
+    process_contact_import_task,
+)
 
 
 class CampaignCallLogViewTests(TestCase):
@@ -230,7 +235,10 @@ class ContactImportJobTests(TestCase):
         job.refresh_from_db()
         self.assertTrue(job.cancel_requested)
 
-    def test_process_contact_import_task_persists_failures_and_duplicates(self):
+    @patch("autodialer.tasks.cleanup_contact_import_csv_file_task.apply_async")
+    def test_process_contact_import_task_persists_failures_and_duplicates(
+        self, cleanup_mock
+    ):
         existing_contact = Contact.objects.create(
             owner=self.profile,
             campaign=self.campaign,
@@ -269,6 +277,7 @@ class ContactImportJobTests(TestCase):
         self.assertEqual(job.created_count, 2)
         self.assertEqual(job.failed_count, 3)
         self.assertEqual(self.campaign.contacts.count(), 3)
+        cleanup_mock.assert_called_once_with(args=[str(job.id)], countdown=300)
 
         failures = list(
             ContactImportFailure.objects.filter(job=job).order_by("row_number")
@@ -287,7 +296,10 @@ class ContactImportJobTests(TestCase):
         self.assertEqual(failure_response.data["count"], 3)
         self.assertEqual(len(failure_response.data["results"]), 2)
 
-    def test_process_contact_import_task_honors_cancel_before_processing(self):
+    @patch("autodialer.tasks.cleanup_contact_import_csv_file_task.apply_async")
+    def test_process_contact_import_task_honors_cancel_before_processing(
+        self, cleanup_mock
+    ):
         job = ContactImportJob.objects.create(
             owner=self.profile,
             campaign=self.campaign,
@@ -308,3 +320,81 @@ class ContactImportJobTests(TestCase):
         self.assertEqual(job.status, ContactImportJob.Status.CANCELED)
         self.assertEqual(job.processed_rows, 0)
         self.assertEqual(self.campaign.contacts.count(), 0)
+        cleanup_mock.assert_called_once_with(args=[str(job.id)], countdown=300)
+
+    def test_cleanup_contact_import_csv_file_task_deletes_stored_csv(self):
+        job = ContactImportJob.objects.create(
+            owner=self.profile,
+            campaign=self.campaign,
+            status=ContactImportJob.Status.COMPLETED,
+            original_filename="contacts.csv",
+            csv_file=SimpleUploadedFile(
+                "contacts.csv",
+                b"phone_number,name\n01700000001,Alpha\n",
+                content_type="text/csv",
+            ),
+        )
+
+        file_path = job.csv_file.path
+        self.assertTrue(job.csv_file.storage.exists(job.csv_file.name))
+
+        result = cleanup_contact_import_csv_file_task(str(job.id))
+
+        job.refresh_from_db()
+        self.assertEqual(result["status"], "deleted")
+        self.assertEqual(job.csv_file.name, "")
+        self.assertFalse(os.path.exists(file_path))
+
+    def test_cleanup_stale_contact_import_csv_files_deletes_only_overdue_files(self):
+        old_job = ContactImportJob.objects.create(
+            owner=self.profile,
+            campaign=self.campaign,
+            status=ContactImportJob.Status.COMPLETED,
+            original_filename="old.csv",
+            completed_at=timezone.now() - timedelta(minutes=10),
+            csv_file=SimpleUploadedFile(
+                "old.csv",
+                b"phone_number,name\n01700000001,Alpha\n",
+                content_type="text/csv",
+            ),
+        )
+        recent_job = ContactImportJob.objects.create(
+            owner=self.profile,
+            campaign=self.campaign,
+            status=ContactImportJob.Status.COMPLETED,
+            original_filename="recent.csv",
+            completed_at=timezone.now() - timedelta(minutes=1),
+            csv_file=SimpleUploadedFile(
+                "recent.csv",
+                b"phone_number,name\n01700000002,Bravo\n",
+                content_type="text/csv",
+            ),
+        )
+        active_job = ContactImportJob.objects.create(
+            owner=self.profile,
+            campaign=self.campaign,
+            status=ContactImportJob.Status.PROCESSING,
+            original_filename="active.csv",
+            csv_file=SimpleUploadedFile(
+                "active.csv",
+                b"phone_number,name\n01700000003,Charlie\n",
+                content_type="text/csv",
+            ),
+        )
+
+        old_path = old_job.csv_file.path
+        recent_path = recent_job.csv_file.path
+        active_path = active_job.csv_file.path
+
+        deleted_count = cleanup_stale_contact_import_csv_files()
+
+        old_job.refresh_from_db()
+        recent_job.refresh_from_db()
+        active_job.refresh_from_db()
+        self.assertEqual(deleted_count, 1)
+        self.assertEqual(old_job.csv_file.name, "")
+        self.assertFalse(os.path.exists(old_path))
+        self.assertTrue(recent_job.csv_file.name)
+        self.assertTrue(os.path.exists(recent_path))
+        self.assertTrue(active_job.csv_file.name)
+        self.assertTrue(os.path.exists(active_path))

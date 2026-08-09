@@ -3,11 +3,13 @@ from __future__ import annotations
 import csv
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 from io import TextIOWrapper
 from typing import Any
 
 from celery import shared_task
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from autodialer.models import Campaign, Contact, ContactImportFailure, ContactImportJob
@@ -19,6 +21,12 @@ from autodialer.services.workflows import (
 )
 
 CONTACT_IMPORT_BATCH_SIZE = 1000
+CONTACT_IMPORT_CLEANUP_DELAY_SECONDS = 300
+CONTACT_IMPORT_TERMINAL_STATUSES = [
+    ContactImportJob.Status.COMPLETED,
+    ContactImportJob.Status.FAILED,
+    ContactImportJob.Status.CANCELED,
+]
 CONTACT_IMPORT_DUPLICATE_REASON = (
     "Duplicate phone number already exists in this campaign."
 )
@@ -97,6 +105,13 @@ def _refresh_job(job: ContactImportJob) -> ContactImportJob:
     return job
 
 
+def _schedule_contact_import_file_cleanup(job_id: str) -> None:
+    cleanup_contact_import_csv_file_task.apply_async(
+        args=[job_id],
+        countdown=CONTACT_IMPORT_CLEANUP_DELAY_SECONDS,
+    )
+
+
 def _mark_contact_import_canceled(job: ContactImportJob) -> None:
     _refresh_job(job)
     if job.status == ContactImportJob.Status.CANCELED:
@@ -105,6 +120,7 @@ def _mark_contact_import_canceled(job: ContactImportJob) -> None:
     job.completed_at = timezone.now()
     job.error_message = ""
     job.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
+    _schedule_contact_import_file_cleanup(str(job.id))
 
 
 def _contact_import_canceled(job: ContactImportJob) -> bool:
@@ -393,6 +409,7 @@ def process_contact_import_task(job_id: str) -> dict[str, int | str]:
         job.status = ContactImportJob.Status.COMPLETED
         job.completed_at = timezone.now()
         job.save(update_fields=["status", "completed_at", "updated_at"])
+        _schedule_contact_import_file_cleanup(str(job.id))
         return {
             "status": ContactImportJob.Status.COMPLETED,
             "processed_rows": job.processed_rows,
@@ -413,7 +430,41 @@ def process_contact_import_task(job_id: str) -> dict[str, int | str]:
                     "updated_at",
                 ]
             )
+            _schedule_contact_import_file_cleanup(str(job.id))
         raise
+
+
+@shared_task(name="autodialer.tasks.cleanup_contact_import_csv_file_task")
+def cleanup_contact_import_csv_file_task(job_id: str) -> dict[str, str]:
+    job = ContactImportJob.objects.filter(pk=job_id).first()
+    if job is None:
+        return {"status": "missing"}
+    if job.status not in CONTACT_IMPORT_TERMINAL_STATUSES:
+        return {"status": "skipped"}
+    if not job.csv_file:
+        return {"status": "already_deleted"}
+
+    job.csv_file.delete(save=False)
+    job.csv_file = ""
+    job.save(update_fields=["csv_file", "updated_at"])
+    return {"status": "deleted"}
+
+
+@shared_task(name="autodialer.tasks.cleanup_stale_contact_import_csv_files")
+def cleanup_stale_contact_import_csv_files() -> int:
+    cutoff = timezone.now() - timedelta(seconds=CONTACT_IMPORT_CLEANUP_DELAY_SECONDS)
+    stale_jobs = ContactImportJob.objects.filter(
+        status__in=CONTACT_IMPORT_TERMINAL_STATUSES,
+        completed_at__isnull=False,
+        completed_at__lte=cutoff,
+    ).filter(~Q(csv_file=""))
+
+    deleted_count = 0
+    for job_id in stale_jobs.values_list("id", flat=True):
+        result = cleanup_contact_import_csv_file_task(str(job_id))
+        if result["status"] == "deleted":
+            deleted_count += 1
+    return deleted_count
 
 
 @shared_task(name="autodialer.tasks.activate_due_campaigns")
