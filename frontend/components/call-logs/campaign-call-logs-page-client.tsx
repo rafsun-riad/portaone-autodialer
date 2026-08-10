@@ -820,10 +820,12 @@ export function CampaignCallLogsPageClient() {
               Cancel
             </Button>
             <Button
-              onPress={restartForm.handleSubmit((values) =>
-                restartMutation.mutate(values),
-              )}
-              isLoading={restartMutation.isPending}
+              onPress={() =>
+                restartForm.handleSubmit((values) =>
+                  restartMutation.mutate(values),
+                )()
+              }
+              isDisabled={restartMutation.isPending}
             >
               Confirm restart
             </Button>
