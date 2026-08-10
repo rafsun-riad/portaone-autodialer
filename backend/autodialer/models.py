@@ -179,6 +179,17 @@ def contact_import_upload_to(instance: ContactImportJob, filename: str) -> str:
     )
 
 
+def call_log_export_upload_to(instance: CallLogExportJob, filename: str) -> str:
+    parsed_name = Path(filename)
+    extension = parsed_name.suffix.lower() or ".csv"
+    safe_stem = get_valid_filename(parsed_name.stem) or f"call_log_export_{instance.id}"
+    return (
+        "call-log-exports/"
+        f"{instance.owner.username}/{instance.campaign_id}/{instance.id}/"
+        f"{safe_stem}{extension}"
+    )
+
+
 class ContactImportJob(TimestampedModel):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -251,6 +262,58 @@ class ContactImportFailure(TimestampedModel):
 
     def __str__(self) -> str:
         return f"Import failure row {self.row_number}"
+
+
+class CallLogExportJob(TimestampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PREPARING = "preparing", "Preparing"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELED = "canceled", "Canceled"
+
+    owner = models.ForeignKey(
+        ExternalUserProfile,
+        on_delete=models.CASCADE,
+        related_name="call_log_export_jobs",
+    )
+    campaign = models.ForeignKey(
+        Campaign,
+        on_delete=models.CASCADE,
+        related_name="call_log_export_jobs",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    export_file = models.FileField(
+        upload_to=call_log_export_upload_to,
+        max_length=255,
+        blank=True,
+    )
+    original_filename = models.CharField(max_length=255, blank=True)
+    total_rows = models.PositiveIntegerField(default=0)
+    processed_rows = models.PositiveIntegerField(default=0)
+    cancel_requested = models.BooleanField(default=False)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    first_downloaded_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]  # noqa: RUF012
+        indexes = [  # noqa: RUF012
+            models.Index(fields=["owner", "status"]),
+            models.Index(fields=["owner", "campaign", "status"]),
+            models.Index(fields=["owner", "expires_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Call log export {self.id} for {self.campaign}"
 
 
 class CallLog(TimestampedModel):

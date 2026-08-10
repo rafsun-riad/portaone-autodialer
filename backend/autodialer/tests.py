@@ -11,6 +11,7 @@ from rest_framework.test import APIClient
 
 from autodialer.models import (
     CallLog,
+    CallLogExportJob,
     Campaign,
     Contact,
     ContactImportFailure,
@@ -19,7 +20,9 @@ from autodialer.models import (
 )
 from autodialer.tasks import (
     cleanup_contact_import_csv_file_task,
+    cleanup_stale_call_log_export_files,
     cleanup_stale_contact_import_csv_files,
+    process_call_log_export_task,
     process_contact_import_task,
 )
 
@@ -398,3 +401,231 @@ class ContactImportJobTests(TestCase):
         self.assertTrue(os.path.exists(recent_path))
         self.assertTrue(active_job.csv_file.name)
         self.assertTrue(os.path.exists(active_path))
+
+
+class CallLogExportJobTests(TestCase):
+    def setUp(self):
+        self.media_root = tempfile.mkdtemp()
+        self.media_override = override_settings(MEDIA_ROOT=self.media_root)
+        self.media_override.enable()
+        self.addCleanup(self.media_override.disable)
+        self.addCleanup(lambda: shutil.rmtree(self.media_root, ignore_errors=True))
+
+        self.client = APIClient()
+        self.profile = ExternalUserProfile.objects.create(
+            username="export-operator",
+            access_token="token",
+        )
+        self.paused_campaign = Campaign.objects.create(
+            owner=self.profile,
+            name="Paused Export Campaign",
+            status=Campaign.CampaignStatus.PAUSED,
+            connect_to="1001",
+            billable_account="1001",
+            caller_id="8801700000000",
+            started_at=timezone.now(),
+        )
+        self.processing_campaign = Campaign.objects.create(
+            owner=self.profile,
+            name="Processing Campaign",
+            status=Campaign.CampaignStatus.PROCESSING,
+            connect_to="1002",
+            billable_account="1002",
+            caller_id="8801700000000",
+            started_at=timezone.now(),
+        )
+        self.contact = Contact.objects.create(
+            owner=self.profile,
+            campaign=self.paused_campaign,
+            phone_number="8801700000001",
+            name="Export Contact",
+            status=Contact.ContactStatus.CALLED,
+        )
+        CallLog.objects.create(
+            owner=self.profile,
+            campaign=self.paused_campaign,
+            contact=self.contact,
+            external_call_id="call-success",
+            status="terminated",
+            account_id="1001",
+            caller_id="8801700000000",
+            destination=self.contact.phone_number,
+            reason="BYE Received",
+            reason_code=487,
+            duration=32,
+            connect_time=timezone.now(),
+            playback_requested_at=timezone.now(),
+            playback_completed_at=timezone.now(),
+        )
+        CallLog.objects.create(
+            owner=self.profile,
+            campaign=self.paused_campaign,
+            contact=self.contact,
+            external_call_id="call-invalid",
+            status="failed",
+            account_id="1001",
+            caller_id="8801700000000",
+            destination="8801700000002",
+            reason="Auth Failed",
+            reason_code=403,
+            duration=0,
+        )
+
+    def authenticate(self):
+        self.client.credentials(
+            HTTP_AUTHORIZATION="Bearer token",
+            HTTP_X_PORTAL_USERNAME=self.profile.username,
+        )
+
+    @patch("autodialer.views.process_call_log_export_task.delay")
+    def test_start_export_creates_async_job_for_paused_campaign(self, delay_mock):
+        self.authenticate()
+
+        response = self.client.post(
+            f"/api/campaigns/{self.paused_campaign.id}/calls/export/"
+        )
+
+        self.assertEqual(response.status_code, 202)
+        job = CallLogExportJob.objects.get(pk=response.data["id"])
+        self.assertEqual(job.owner, self.profile)
+        self.assertEqual(job.campaign, self.paused_campaign)
+        self.assertEqual(job.status, CallLogExportJob.Status.PENDING)
+        self.assertTrue(job.original_filename.endswith(".csv"))
+        delay_mock.assert_called_once_with(str(job.id))
+
+    @patch("autodialer.views.process_call_log_export_task.delay")
+    def test_start_export_rejects_ineligible_campaign_status(self, delay_mock):
+        self.authenticate()
+
+        response = self.client.post(
+            f"/api/campaigns/{self.processing_campaign.id}/calls/export/"
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Pause or finish the campaign", response.data["detail"])
+        delay_mock.assert_not_called()
+
+    def test_current_export_endpoint_returns_completed_unexpired_job(self):
+        self.authenticate()
+        job = CallLogExportJob.objects.create(
+            owner=self.profile,
+            campaign=self.paused_campaign,
+            status=CallLogExportJob.Status.COMPLETED,
+            original_filename="paused-export.csv",
+            export_file=SimpleUploadedFile(
+                "paused-export.csv",
+                b"header\nvalue\n",
+                content_type="text/csv",
+            ),
+            total_rows=2,
+            processed_rows=2,
+            completed_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(minutes=30),
+        )
+
+        response = self.client.get(
+            f"/api/campaigns/{self.paused_campaign.id}/calls/export/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["job"]["id"], str(job.id))
+
+    @patch("autodialer.tasks.cleanup_call_log_export_file_task.apply_async")
+    def test_process_call_log_export_task_generates_csv_file(self, cleanup_mock):
+        job = CallLogExportJob.objects.create(
+            owner=self.profile,
+            campaign=self.paused_campaign,
+            original_filename="paused-export.csv",
+        )
+
+        result = process_call_log_export_task(str(job.id))
+
+        job.refresh_from_db()
+        self.assertEqual(result["status"], CallLogExportJob.Status.COMPLETED)
+        self.assertEqual(job.status, CallLogExportJob.Status.COMPLETED)
+        self.assertEqual(job.total_rows, 2)
+        self.assertEqual(job.processed_rows, 2)
+        self.assertTrue(job.export_file.name.endswith("paused-export.csv"))
+        cleanup_mock.assert_called_once_with(args=[str(job.id)], countdown=3600)
+
+        with job.export_file.open("rb") as exported_file:
+            csv_text = exported_file.read().decode("utf-8")
+
+        self.assertIn(
+            "Campaign Name,Campaign Start Time,Campaign Finish Time", csv_text
+        )
+        self.assertIn("Paused Export Campaign", csv_text)
+        self.assertIn("call-success", csv_text)
+        self.assertIn("Current status: Terminated", csv_text)
+        self.assertIn("Success", csv_text)
+        self.assertIn("Invalid Number", csv_text)
+
+    @patch("autodialer.views.schedule_call_log_export_file_cleanup")
+    def test_download_updates_first_downloaded_retention(self, cleanup_schedule_mock):
+        self.authenticate()
+        job = CallLogExportJob.objects.create(
+            owner=self.profile,
+            campaign=self.paused_campaign,
+            status=CallLogExportJob.Status.COMPLETED,
+            original_filename="paused-export.csv",
+            export_file=SimpleUploadedFile(
+                "paused-export.csv",
+                b"a,b\n1,2\n",
+                content_type="text/csv",
+            ),
+            total_rows=1,
+            processed_rows=1,
+            completed_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+
+        response = self.client.get(f"/api/call-log-export-jobs/{job.id}/download/")
+        downloaded_content = b"".join(response.streaming_content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(downloaded_content, b"a,b\n1,2\n")
+        self.assertIn("paused-export.csv", response["Content-Disposition"])
+
+        job.refresh_from_db()
+        self.assertIsNotNone(job.first_downloaded_at)
+        self.assertGreater(job.expires_at, timezone.now() + timedelta(minutes=50))
+        cleanup_schedule_mock.assert_called_once_with(str(job.id), 3600)
+
+    def test_cleanup_stale_call_log_export_files_deletes_only_expired_files(self):
+        expired_job = CallLogExportJob.objects.create(
+            owner=self.profile,
+            campaign=self.paused_campaign,
+            status=CallLogExportJob.Status.COMPLETED,
+            original_filename="expired.csv",
+            export_file=SimpleUploadedFile(
+                "expired.csv",
+                b"a,b\n1,2\n",
+                content_type="text/csv",
+            ),
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        fresh_job = CallLogExportJob.objects.create(
+            owner=self.profile,
+            campaign=self.paused_campaign,
+            status=CallLogExportJob.Status.COMPLETED,
+            original_filename="fresh.csv",
+            export_file=SimpleUploadedFile(
+                "fresh.csv",
+                b"a,b\n3,4\n",
+                content_type="text/csv",
+            ),
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+
+        expired_path = expired_job.export_file.path
+        fresh_path = fresh_job.export_file.path
+
+        deleted_count = cleanup_stale_call_log_export_files()
+
+        expired_job.refresh_from_db()
+        fresh_job.refresh_from_db()
+        self.assertEqual(deleted_count, 1)
+        self.assertEqual(expired_job.export_file.name, "")
+        self.assertFalse(os.path.exists(expired_path))
+        self.assertTrue(fresh_job.export_file.name)
+        self.assertTrue(os.path.exists(fresh_path))

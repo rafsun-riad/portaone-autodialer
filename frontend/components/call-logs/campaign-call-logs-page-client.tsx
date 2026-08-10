@@ -20,13 +20,14 @@ import {
   Square,
   Users,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useDeferredValue, useEffect, useState, useTransition } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import { Dialog } from "@/components/ui/dialog";
-import { apiRequest } from "@/lib/client-api";
+import { ApiError, apiRequest } from "@/lib/client-api";
+import { downloadFile } from "@/lib/download";
 import {
   formatDhakaDateTime,
   formatDhakaDateTimeWithSeconds,
@@ -92,6 +93,27 @@ type CampaignCallLogSummary = {
   };
 };
 
+type CallLogExportJob = {
+  id: EntityId;
+  campaign: EntityId;
+  campaign_name: string;
+  status: string;
+  original_filename: string;
+  total_rows: number;
+  processed_rows: number;
+  cancel_requested: boolean;
+  error_message: string;
+  started_at: string | null;
+  completed_at: string | null;
+  first_downloaded_at: string | null;
+  expires_at: string | null;
+  progress_percent: number;
+};
+
+type ActiveCallLogExportJobResponse = {
+  job: CallLogExportJob | null;
+};
+
 const currentStatusOptions = [
   "trying",
   "ringing",
@@ -106,6 +128,8 @@ const currentStatusOptions = [
   "terminated",
   "failed",
 ] as const;
+
+const terminalExportStatuses = ["completed", "failed", "canceled"] as const;
 
 const restartSchema = z
   .object({
@@ -203,11 +227,12 @@ function RateBar({
 }
 
 export function CampaignCallLogsPageClient() {
+  const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
   const [isNavigating, startTransition] = useTransition();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
-    null,
+    searchParams.get("campaignId"),
   );
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
@@ -215,6 +240,9 @@ export function CampaignCallLogsPageClient() {
   const [derivedStatus, setDerivedStatus] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportBlockedOpen, setExportBlockedOpen] = useState(false);
+  const [isDownloadingExport, setIsDownloadingExport] = useState(false);
   const deferredSearch = useDeferredValue(search);
 
   const restartForm = useForm<RestartValues>({
@@ -276,6 +304,30 @@ export function CampaignCallLogsPageClient() {
       );
     },
     refetchInterval: activeCampaignId ? 5000 : false,
+    refetchIntervalInBackground: true,
+  });
+
+  const currentExportJobQuery = useQuery({
+    queryKey: ["call-log-export-job-current", activeCampaignId],
+    enabled: Boolean(activeCampaignId),
+    queryFn: () =>
+      apiRequest<ActiveCallLogExportJobResponse>(
+        `/api/backend/campaigns/${activeCampaignId}/calls/export/`,
+      ),
+    refetchInterval: (query) => {
+      const job = query.state.data?.job;
+      if (!activeCampaignId) {
+        return false;
+      }
+      if (!job) {
+        return exportOpen ? 2000 : false;
+      }
+      return terminalExportStatuses.includes(
+        job.status as (typeof terminalExportStatuses)[number],
+      )
+        ? false
+        : 2000;
+    },
     refetchIntervalInBackground: true,
   });
 
@@ -357,6 +409,69 @@ export function CampaignCallLogsPageClient() {
     },
   });
 
+  const startExportMutation = useMutation({
+    mutationFn: (campaignId: EntityId) =>
+      apiRequest<CallLogExportJob>(
+        `/api/backend/campaigns/${campaignId}/calls/export/`,
+        {
+          method: "POST",
+        },
+      ),
+    onSuccess: async () => {
+      setExportOpen(true);
+      setNotice("Call log export started.");
+      await queryClient.invalidateQueries({
+        queryKey: ["call-log-export-job-current", activeCampaignId],
+      });
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        setExportOpen(true);
+        setNotice(
+          "A call log export is already running for this campaign. Resuming it now.",
+        );
+        queryClient.invalidateQueries({
+          queryKey: ["call-log-export-job-current", activeCampaignId],
+        });
+        return;
+      }
+
+      if (error instanceof ApiError && error.status === 400) {
+        setExportOpen(false);
+        setExportBlockedOpen(true);
+      }
+
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Unable to start the call log export.",
+      );
+    },
+  });
+
+  const cancelExportMutation = useMutation({
+    mutationFn: (jobId: EntityId) =>
+      apiRequest<CallLogExportJob>(
+        `/api/backend/call-log-export-jobs/${jobId}/cancel/`,
+        {
+          method: "POST",
+        },
+      ),
+    onSuccess: () => {
+      setNotice(
+        "Cancellation requested. The current 5000-row batch will finish before the export stops.",
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["call-log-export-job-current", activeCampaignId],
+      });
+    },
+    onError: (error) => {
+      setNotice(
+        error instanceof Error ? error.message : "Unable to cancel the export.",
+      );
+    },
+  });
+
   useEffect(() => {
     startTransition(() => {
       router.replace(
@@ -370,6 +485,51 @@ export function CampaignCallLogsPageClient() {
   const selectedCampaign = campaignsQuery.data?.results.find(
     (campaign) => campaign.id === activeCampaignId,
   );
+  const currentExportJob = currentExportJobQuery.data?.job ?? null;
+  const exportIsTerminal = currentExportJob
+    ? terminalExportStatuses.includes(
+        currentExportJob.status as (typeof terminalExportStatuses)[number],
+      )
+    : false;
+  const exportIsRunning = Boolean(currentExportJob && !exportIsTerminal);
+  const exportProgressPercent = currentExportJob
+    ? currentExportJob.total_rows > 0
+      ? currentExportJob.progress_percent
+      : currentExportJob.status === "completed"
+        ? 100
+        : 0
+    : 0;
+  const exportExpiryLabel = currentExportJob?.expires_at
+    ? formatDhakaDateTime(currentExportJob.expires_at)
+    : null;
+  const exportModalOpen =
+    exportOpen || Boolean(currentExportJob && !exportIsTerminal);
+
+  useEffect(() => {
+    if (!exportIsRunning) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    const handlePopState = () => {
+      window.history.pushState(null, "", window.location.href);
+      setNotice("Cancel the call log export before leaving this page.");
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.history.pushState(null, "", window.location.href);
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [exportIsRunning]);
+
   const actionVisibility = selectedCampaign
     ? {
         canPause: selectedCampaign.status === "processing",
@@ -391,6 +551,64 @@ export function CampaignCallLogsPageClient() {
     Math.ceil((callLogsQuery.data?.count ?? 0) / 100),
   );
 
+  const handleExportStart = () => {
+    if (!activeCampaignId || !selectedCampaign) {
+      setNotice("Select a campaign first.");
+      return;
+    }
+
+    if (!["paused", "finished"].includes(selectedCampaign.status)) {
+      setExportBlockedOpen(true);
+      return;
+    }
+
+    setExportOpen(true);
+
+    if (
+      currentExportJob?.status === "completed" &&
+      currentExportJob.expires_at
+    ) {
+      return;
+    }
+    if (currentExportJob?.status === "pending") {
+      return;
+    }
+    if (currentExportJob?.status === "preparing") {
+      return;
+    }
+    if (currentExportJob?.status === "processing") {
+      return;
+    }
+
+    startExportMutation.mutate(activeCampaignId);
+  };
+
+  const handleDownloadExport = async () => {
+    if (!currentExportJob) {
+      return;
+    }
+
+    setIsDownloadingExport(true);
+    try {
+      await downloadFile(
+        `/api/backend/call-log-export-jobs/${currentExportJob.id}/download/`,
+        currentExportJob.original_filename || "call-logs.csv",
+      );
+      setNotice(
+        "Call log export downloaded. The generated file will be removed after the retention window.",
+      );
+      await queryClient.invalidateQueries({
+        queryKey: ["call-log-export-job-current", activeCampaignId],
+      });
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Unable to download the CSV.",
+      );
+    } finally {
+      setIsDownloadingExport(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="dashboard-panel flex flex-col gap-4 p-6 lg:flex-row lg:items-center lg:justify-between">
@@ -406,7 +624,15 @@ export function CampaignCallLogsPageClient() {
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Button variant="secondary" isDisabled>
+          <Button
+            variant="secondary"
+            onPress={handleExportStart}
+            isDisabled={
+              !activeCampaignId ||
+              startExportMutation.isPending ||
+              currentExportJobQuery.isLoading
+            }
+          >
             <Download className="size-4" />
             Export CSV
           </Button>
@@ -421,7 +647,9 @@ export function CampaignCallLogsPageClient() {
                     })
                   : null
               }
-              isDisabled={!activeCampaignId || actionMutation.isPending}
+              isDisabled={
+                !activeCampaignId || actionMutation.isPending || exportIsRunning
+              }
             >
               <Pause className="size-4" />
               Pause
@@ -438,7 +666,9 @@ export function CampaignCallLogsPageClient() {
                     })
                   : null
               }
-              isDisabled={!activeCampaignId || actionMutation.isPending}
+              isDisabled={
+                !activeCampaignId || actionMutation.isPending || exportIsRunning
+              }
             >
               <PhoneCall className="size-4" />
               Resume
@@ -447,7 +677,11 @@ export function CampaignCallLogsPageClient() {
           {actionVisibility.canRestart ? (
             <Button
               onPress={() => setRestartOpen(true)}
-              isDisabled={!activeCampaignId || restartMutation.isPending}
+              isDisabled={
+                !activeCampaignId ||
+                restartMutation.isPending ||
+                exportIsRunning
+              }
             >
               <RotateCcw className="size-4" />
               Restart campaign
@@ -464,7 +698,9 @@ export function CampaignCallLogsPageClient() {
                     })
                   : null
               }
-              isDisabled={!activeCampaignId || actionMutation.isPending}
+              isDisabled={
+                !activeCampaignId || actionMutation.isPending || exportIsRunning
+              }
             >
               <Square className="size-4" />
               Stop
@@ -486,6 +722,7 @@ export function CampaignCallLogsPageClient() {
             <select
               className="dashboard-input-shell w-full rounded-2xl px-4 py-3 outline-none"
               value={activeCampaignId ?? ""}
+              disabled={exportIsRunning}
               onChange={(event) => {
                 setSelectedCampaignId(event.target.value || null);
                 setPage(1);
@@ -508,6 +745,7 @@ export function CampaignCallLogsPageClient() {
                 className="w-full bg-transparent outline-none"
                 placeholder="8801..."
                 value={search}
+                disabled={exportIsRunning}
                 onChange={(event) => {
                   setSearch(event.target.value);
                   setPage(1);
@@ -522,6 +760,7 @@ export function CampaignCallLogsPageClient() {
             <select
               className="dashboard-input-shell w-full rounded-2xl px-4 py-3 outline-none"
               value={currentStatus}
+              disabled={exportIsRunning}
               onChange={(event) => {
                 setCurrentStatus(event.target.value);
                 setPage(1);
@@ -541,6 +780,7 @@ export function CampaignCallLogsPageClient() {
             <select
               className="dashboard-input-shell w-full rounded-2xl px-4 py-3 outline-none"
               value={derivedStatus}
+              disabled={exportIsRunning}
               onChange={(event) => {
                 setDerivedStatus(event.target.value);
                 setPage(1);
@@ -790,7 +1030,7 @@ export function CampaignCallLogsPageClient() {
               onPress={() =>
                 setPage((currentPage) => Math.max(1, currentPage - 1))
               }
-              isDisabled={page <= 1}
+              isDisabled={page <= 1 || exportIsRunning}
             >
               <ChevronLeft className="size-4" />
               Previous
@@ -800,7 +1040,7 @@ export function CampaignCallLogsPageClient() {
               onPress={() =>
                 setPage((currentPage) => Math.min(pageCount, currentPage + 1))
               }
-              isDisabled={page >= pageCount}
+              isDisabled={page >= pageCount || exportIsRunning}
             >
               Next
               <ChevronRight className="size-4" />
@@ -939,6 +1179,194 @@ export function CampaignCallLogsPageClient() {
             </label>
           </div>
         </div>
+      </Dialog>
+
+      <Dialog
+        open={exportBlockedOpen}
+        onClose={() => setExportBlockedOpen(false)}
+        title="Export unavailable"
+        description="Pause the selected campaign or wait until it finishes before exporting its call logs to CSV. The export runs in 5000-row batches and only starts for paused or finished campaigns."
+        footer={
+          <Button
+            variant="secondary"
+            onPress={() => setExportBlockedOpen(false)}
+          >
+            Close
+          </Button>
+        }
+      >
+        <div className="rounded-[1.75rem] border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-7 text-amber-900">
+          {selectedCampaign
+            ? `Campaign status is ${formatLabel(selectedCampaign.status)}.`
+            : "Select a campaign first."}
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={exportModalOpen}
+        onClose={() => {
+          if (exportIsRunning) {
+            return;
+          }
+          setExportOpen(false);
+        }}
+        dismissible={!exportIsRunning}
+        closeOnBackdrop={!exportIsRunning}
+        title="Export call logs"
+        description="The export processes the selected campaign in 5000-row batches and writes the CSV using the same values shown in the table."
+        widthClassName="max-w-4xl"
+        footer={
+          currentExportJob ? (
+            <>
+              {!exportIsRunning ? (
+                <Button
+                  variant="secondary"
+                  onPress={() => setExportOpen(false)}
+                >
+                  Close
+                </Button>
+              ) : null}
+              {exportIsRunning ? (
+                <Button
+                  isDisabled={
+                    currentExportJob.cancel_requested ||
+                    cancelExportMutation.isPending
+                  }
+                  isPending={cancelExportMutation.isPending}
+                  onPress={() =>
+                    cancelExportMutation.mutate(currentExportJob.id)
+                  }
+                >
+                  {currentExportJob.cancel_requested
+                    ? "Cancellation queued"
+                    : "Cancel export"}
+                </Button>
+              ) : currentExportJob.status === "completed" ? (
+                <Button
+                  isPending={isDownloadingExport}
+                  onPress={handleDownloadExport}
+                >
+                  <Download className="size-4" />
+                  Download CSV
+                </Button>
+              ) : (
+                <Button
+                  onPress={() =>
+                    activeCampaignId &&
+                    startExportMutation.mutate(activeCampaignId)
+                  }
+                  isDisabled={
+                    !activeCampaignId || startExportMutation.isPending
+                  }
+                  isPending={startExportMutation.isPending}
+                >
+                  Run export again
+                </Button>
+              )}
+            </>
+          ) : (
+            <Button variant="secondary" onPress={() => setExportOpen(false)}>
+              Close
+            </Button>
+          )
+        }
+      >
+        {currentExportJob ? (
+          <div className="space-y-5">
+            <section className="rounded-[1.75rem] border border-slate-200 bg-slate-50 p-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
+                    Export progress
+                  </p>
+                  <h4 className="mt-2 text-xl font-semibold text-slate-950">
+                    {currentExportJob.original_filename || "call-logs.csv"}
+                  </h4>
+                  <p className="mt-2 text-sm leading-7 text-slate-600">
+                    {currentExportJob.status === "preparing"
+                      ? "Counting campaign call logs before CSV generation begins."
+                      : currentExportJob.status === "processing"
+                        ? "Writing the CSV in 5000-row batches. Keep this modal open until the export completes or is canceled."
+                        : currentExportJob.status === "completed"
+                          ? "Export finished. Download the CSV before the retention window expires."
+                          : currentExportJob.status === "canceled"
+                            ? "Export stopped after the current batch finished."
+                            : "Export stopped unexpectedly. Review the error details below."}
+                  </p>
+                </div>
+                <div className="inline-flex rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium capitalize text-slate-700">
+                  {currentExportJob.cancel_requested && exportIsRunning
+                    ? "Cancel requested"
+                    : currentExportJob.status}
+                </div>
+              </div>
+
+              <div className="mt-5 overflow-hidden rounded-full bg-slate-200">
+                {currentExportJob.total_rows > 0 ||
+                currentExportJob.status === "completed" ? (
+                  <div
+                    className="h-3 rounded-full bg-teal-500 transition-[width] duration-500"
+                    style={{ width: `${exportProgressPercent}%` }}
+                  />
+                ) : (
+                  <div className="h-3 w-1/3 animate-pulse rounded-full bg-teal-400" />
+                )}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+                <span>
+                  {currentExportJob.total_rows > 0
+                    ? `${currentExportJob.processed_rows} of ${currentExportJob.total_rows} rows processed`
+                    : currentExportJob.status === "completed"
+                      ? "Export complete with no rows to write."
+                      : `${currentExportJob.processed_rows} rows processed while the export prepares`}
+                </span>
+                <span>{exportProgressPercent}% complete</span>
+              </div>
+
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
+                <div className="rounded-3xl border border-slate-200 bg-white px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
+                    Processed
+                  </p>
+                  <p className="mt-3 text-2xl font-semibold text-slate-950">
+                    {currentExportJob.processed_rows}
+                  </p>
+                </div>
+                <div className="rounded-3xl border border-slate-200 bg-white px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
+                    Total rows
+                  </p>
+                  <p className="mt-3 text-2xl font-semibold text-slate-950">
+                    {currentExportJob.total_rows}
+                  </p>
+                </div>
+                <div className="rounded-3xl border border-slate-200 bg-white px-4 py-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">
+                    Retention
+                  </p>
+                  <p className="mt-3 text-base font-semibold text-slate-950">
+                    {exportExpiryLabel || "Starts after completion"}
+                  </p>
+                </div>
+              </div>
+
+              {currentExportJob.error_message ? (
+                <div className="mt-5 rounded-3xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                  {currentExportJob.error_message}
+                </div>
+              ) : null}
+            </section>
+          </div>
+        ) : (
+          <div className="rounded-[1.75rem] border border-slate-200 bg-slate-50 px-5 py-6 text-sm leading-7 text-slate-600">
+            {startExportMutation.isPending
+              ? "Creating the export job now. The progress panel will update automatically."
+              : currentExportJobQuery.isLoading
+                ? "Checking whether this campaign already has an active or downloadable export job."
+                : "Start the export to generate a downloadable CSV for the selected campaign."}
+          </div>
+        )}
       </Dialog>
     </div>
   );

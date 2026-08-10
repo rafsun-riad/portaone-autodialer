@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -8,12 +10,26 @@ from io import TextIOWrapper
 from typing import Any
 
 from celery import shared_task
+from django.core.files.base import File
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from autodialer.models import Campaign, Contact, ContactImportFailure, ContactImportJob
+from autodialer.models import (
+    CallLog,
+    CallLogExportJob,
+    Campaign,
+    Contact,
+    ContactImportFailure,
+    ContactImportJob,
+)
 from autodialer.serializers import ContactImportRowSerializer
+from autodialer.services.call_logs import (
+    CALL_LOG_EXPORT_HEADERS,
+    build_call_log_export_filename,
+    build_call_log_export_row,
+    build_derived_status_expression,
+)
 from autodialer.services.workflows import (
     dispatch_campaign_calls,
     maybe_finish_campaign,
@@ -30,6 +46,13 @@ CONTACT_IMPORT_TERMINAL_STATUSES = [
 CONTACT_IMPORT_DUPLICATE_REASON = (
     "Duplicate phone number already exists in this campaign."
 )
+CALL_LOG_EXPORT_BATCH_SIZE = 5000
+CALL_LOG_EXPORT_RETENTION_SECONDS = 3600
+CALL_LOG_EXPORT_TERMINAL_STATUSES = [
+    CallLogExportJob.Status.COMPLETED,
+    CallLogExportJob.Status.FAILED,
+    CallLogExportJob.Status.CANCELED,
+]
 
 
 @dataclass(slots=True)
@@ -105,10 +128,31 @@ def _refresh_job(job: ContactImportJob) -> ContactImportJob:
     return job
 
 
+def _refresh_call_log_export_job(job: CallLogExportJob) -> CallLogExportJob:
+    job.refresh_from_db(
+        fields=[
+            "status",
+            "cancel_requested",
+            "processed_rows",
+            "total_rows",
+            "expires_at",
+            "first_downloaded_at",
+        ]
+    )
+    return job
+
+
 def _schedule_contact_import_file_cleanup(job_id: str) -> None:
     cleanup_contact_import_csv_file_task.apply_async(
         args=[job_id],
         countdown=CONTACT_IMPORT_CLEANUP_DELAY_SECONDS,
+    )
+
+
+def schedule_call_log_export_file_cleanup(job_id: str, delay_seconds: int) -> None:
+    cleanup_call_log_export_file_task.apply_async(
+        args=[job_id],
+        countdown=delay_seconds,
     )
 
 
@@ -123,11 +167,29 @@ def _mark_contact_import_canceled(job: ContactImportJob) -> None:
     _schedule_contact_import_file_cleanup(str(job.id))
 
 
+def _mark_call_log_export_canceled(job: CallLogExportJob) -> None:
+    _refresh_call_log_export_job(job)
+    if job.status == CallLogExportJob.Status.CANCELED:
+        return
+    job.status = CallLogExportJob.Status.CANCELED
+    job.completed_at = timezone.now()
+    job.error_message = ""
+    job.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
+
+
 def _contact_import_canceled(job: ContactImportJob) -> bool:
     _refresh_job(job)
     if not job.cancel_requested:
         return False
     _mark_contact_import_canceled(job)
+    return True
+
+
+def _call_log_export_canceled(job: CallLogExportJob) -> bool:
+    _refresh_call_log_export_job(job)
+    if not job.cancel_requested:
+        return False
+    _mark_call_log_export_canceled(job)
     return True
 
 
@@ -292,6 +354,15 @@ def _count_contact_import_rows(job: ContactImportJob) -> int:
     return total_rows
 
 
+def _call_log_export_queryset(job: CallLogExportJob):
+    return (
+        CallLog.objects.filter(owner=job.owner, campaign=job.campaign)
+        .select_related("campaign")
+        .annotate(derived_status=build_derived_status_expression())
+        .order_by("created_at", "id")
+    )
+
+
 @shared_task(name="autodialer.tasks.process_contact_import_task")
 def process_contact_import_task(job_id: str) -> dict[str, int | str]:
     job = (
@@ -434,6 +505,160 @@ def process_contact_import_task(job_id: str) -> dict[str, int | str]:
         raise
 
 
+@shared_task(name="autodialer.tasks.process_call_log_export_task")
+def process_call_log_export_task(job_id: str) -> dict[str, int | str]:
+    job = (
+        CallLogExportJob.objects.select_related("owner", "campaign")
+        .filter(pk=job_id)
+        .first()
+    )
+    if job is None:
+        return {"status": CallLogExportJob.Status.FAILED}
+
+    now = timezone.now()
+    if job.cancel_requested:
+        _mark_call_log_export_canceled(job)
+        return {"status": CallLogExportJob.Status.CANCELED}
+
+    job.status = CallLogExportJob.Status.PREPARING
+    job.started_at = job.started_at or now
+    job.completed_at = None
+    job.first_downloaded_at = None
+    job.expires_at = None
+    job.error_message = ""
+    job.save(
+        update_fields=[
+            "status",
+            "started_at",
+            "completed_at",
+            "first_downloaded_at",
+            "expires_at",
+            "error_message",
+            "updated_at",
+        ]
+    )
+
+    temp_file_path: str | None = None
+    try:
+        total_rows = CallLog.objects.filter(
+            owner=job.owner, campaign=job.campaign
+        ).count()
+        _refresh_call_log_export_job(job)
+        if job.status == CallLogExportJob.Status.CANCELED:
+            return {
+                "status": CallLogExportJob.Status.CANCELED,
+                "processed_rows": job.processed_rows,
+            }
+
+        job.total_rows = total_rows
+        job.status = CallLogExportJob.Status.PROCESSING
+        job.save(update_fields=["total_rows", "status", "updated_at"])
+
+        last_created_at = None
+        last_id = None
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            suffix=".csv",
+            delete=False,
+        ) as export_file:
+            temp_file_path = export_file.name
+            writer = csv.writer(export_file)
+            writer.writerow(CALL_LOG_EXPORT_HEADERS)
+
+            while True:
+                queryset = _call_log_export_queryset(job)
+                if last_created_at is not None and last_id is not None:
+                    queryset = queryset.filter(
+                        Q(created_at__gt=last_created_at)
+                        | Q(created_at=last_created_at, id__gt=last_id)
+                    )
+
+                batch = list(queryset[:CALL_LOG_EXPORT_BATCH_SIZE])
+                if not batch:
+                    break
+
+                for call_log in batch:
+                    writer.writerow(build_call_log_export_row(call_log))
+                export_file.flush()
+
+                last_created_at = batch[-1].created_at
+                last_id = batch[-1].id
+
+                _refresh_call_log_export_job(job)
+                job.processed_rows += len(batch)
+                job.save(update_fields=["processed_rows", "updated_at"])
+
+                if _call_log_export_canceled(job):
+                    return {
+                        "status": CallLogExportJob.Status.CANCELED,
+                        "processed_rows": job.processed_rows,
+                    }
+
+        if _call_log_export_canceled(job):
+            return {
+                "status": CallLogExportJob.Status.CANCELED,
+                "processed_rows": job.processed_rows,
+            }
+
+        with open(temp_file_path, "rb") as generated_file:
+            if job.export_file:
+                job.export_file.delete(save=False)
+            job.export_file.save(
+                job.original_filename
+                or build_call_log_export_filename(job.campaign, job.started_at),
+                File(generated_file),
+                save=False,
+            )
+
+        completed_at = timezone.now()
+        _refresh_call_log_export_job(job)
+        job.status = CallLogExportJob.Status.COMPLETED
+        job.completed_at = completed_at
+        job.expires_at = completed_at + timedelta(
+            seconds=CALL_LOG_EXPORT_RETENTION_SECONDS
+        )
+        job.error_message = ""
+        job.save(
+            update_fields=[
+                "status",
+                "completed_at",
+                "expires_at",
+                "error_message",
+                "export_file",
+                "updated_at",
+            ]
+        )
+        schedule_call_log_export_file_cleanup(
+            str(job.id), CALL_LOG_EXPORT_RETENTION_SECONDS
+        )
+        return {
+            "status": CallLogExportJob.Status.COMPLETED,
+            "processed_rows": job.processed_rows,
+            "total_rows": job.total_rows,
+        }
+    except Exception as exc:
+        _refresh_call_log_export_job(job)
+        if job.status != CallLogExportJob.Status.CANCELED:
+            job.status = CallLogExportJob.Status.FAILED
+            job.completed_at = timezone.now()
+            job.error_message = str(exc)
+            job.save(
+                update_fields=[
+                    "status",
+                    "completed_at",
+                    "error_message",
+                    "updated_at",
+                ]
+            )
+        raise
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)
+
+
 @shared_task(name="autodialer.tasks.cleanup_contact_import_csv_file_task")
 def cleanup_contact_import_csv_file_task(job_id: str) -> dict[str, str]:
     job = ContactImportJob.objects.filter(pk=job_id).first()
@@ -450,6 +675,24 @@ def cleanup_contact_import_csv_file_task(job_id: str) -> dict[str, str]:
     return {"status": "deleted"}
 
 
+@shared_task(name="autodialer.tasks.cleanup_call_log_export_file_task")
+def cleanup_call_log_export_file_task(job_id: str) -> dict[str, str]:
+    job = CallLogExportJob.objects.filter(pk=job_id).first()
+    if job is None:
+        return {"status": "missing"}
+    if job.status not in CALL_LOG_EXPORT_TERMINAL_STATUSES:
+        return {"status": "skipped"}
+    if not job.export_file:
+        return {"status": "already_deleted"}
+    if job.expires_at and job.expires_at > timezone.now():
+        return {"status": "waiting"}
+
+    job.export_file.delete(save=False)
+    job.export_file = ""
+    job.save(update_fields=["export_file", "updated_at"])
+    return {"status": "deleted"}
+
+
 @shared_task(name="autodialer.tasks.cleanup_stale_contact_import_csv_files")
 def cleanup_stale_contact_import_csv_files() -> int:
     cutoff = timezone.now() - timedelta(seconds=CONTACT_IMPORT_CLEANUP_DELAY_SECONDS)
@@ -462,6 +705,22 @@ def cleanup_stale_contact_import_csv_files() -> int:
     deleted_count = 0
     for job_id in stale_jobs.values_list("id", flat=True):
         result = cleanup_contact_import_csv_file_task(str(job_id))
+        if result["status"] == "deleted":
+            deleted_count += 1
+    return deleted_count
+
+
+@shared_task(name="autodialer.tasks.cleanup_stale_call_log_export_files")
+def cleanup_stale_call_log_export_files() -> int:
+    stale_jobs = CallLogExportJob.objects.filter(
+        status__in=CALL_LOG_EXPORT_TERMINAL_STATUSES,
+        expires_at__isnull=False,
+        expires_at__lte=timezone.now(),
+    ).filter(~Q(export_file=""))
+
+    deleted_count = 0
+    for job_id in stale_jobs.values_list("id", flat=True):
+        result = cleanup_call_log_export_file_task(str(job_id))
         if result["status"] == "deleted":
             deleted_count += 1
     return deleted_count

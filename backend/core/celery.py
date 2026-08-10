@@ -23,4 +23,8 @@ app.conf.beat_schedule = {
         "task": "autodialer.tasks.cleanup_stale_contact_import_csv_files",
         "schedule": 300.0,
     },
+    "cleanup-stale-call-log-export-files-every-5-minutes": {
+        "task": "autodialer.tasks.cleanup_stale_call_log_export_files",
+        "schedule": 300.0,
+    },
 }

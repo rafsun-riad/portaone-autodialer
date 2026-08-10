@@ -7,6 +7,7 @@ from rest_framework import serializers
 
 from autodialer.models import (
     CallLog,
+    CallLogExportJob,
     Campaign,
     CampaignAudio,
     Contact,
@@ -231,6 +232,38 @@ class ContactImportJobSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_progress_percent(self, obj: ContactImportJob) -> int:
+        if obj.total_rows <= 0:
+            return 0
+        return round(obj.processed_rows / obj.total_rows * 100)
+
+
+class CallLogExportJobSerializer(serializers.ModelSerializer):
+    campaign_name = serializers.CharField(source="campaign.name", read_only=True)
+    progress_percent = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CallLogExportJob
+        fields = [  # noqa: RUF012
+            "id",
+            "campaign",
+            "campaign_name",
+            "status",
+            "original_filename",
+            "total_rows",
+            "processed_rows",
+            "cancel_requested",
+            "error_message",
+            "started_at",
+            "completed_at",
+            "first_downloaded_at",
+            "expires_at",
+            "progress_percent",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_progress_percent(self, obj: CallLogExportJob) -> int:
         if obj.total_rows <= 0:
             return 0
         return round(obj.processed_rows / obj.total_rows * 100)

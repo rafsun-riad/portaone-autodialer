@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import csv
 import io
-from collections.abc import Iterable
+from datetime import timedelta
 from uuid import UUID
 
-from django.db.models import Case, CharField, Q, Value, When
+from django.db.models import Q
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 
 from autodialer.models import (
     CallLog,
+    CallLogExportJob,
     Campaign,
     CampaignAudio,
     Contact,
@@ -24,6 +25,7 @@ from autodialer.models import (
     ExternalUserProfile,
 )
 from autodialer.serializers import (
+    CallLogExportJobSerializer,
     CallLogSerializer,
     CampaignAudioSerializer,
     CampaignRestartSerializer,
@@ -34,6 +36,15 @@ from autodialer.serializers import (
     ContactSerializer,
     LoginSerializer,
     serialize_campaign_call_log_summary,
+)
+from autodialer.services.call_logs import (
+    CALL_STATUS_INVALID_NUMBER,
+    CALL_STATUS_NOT_ANSWERED,
+    CALL_STATUS_OTHER,
+    CALL_STATUS_SUCCESS,
+    build_call_log_export_filename,
+    build_derived_status_expression,
+    collect_latest_contact_statuses,
 )
 from autodialer.services.external_api import ExternalSystemClient, ExternalSystemError
 from autodialer.services.webhook_logs import append_webhook_payload
@@ -48,9 +59,12 @@ from autodialer.services.workflows import (
     sync_customer_profile,
 )
 from autodialer.tasks import (
+    cleanup_call_log_export_file_task,
     dispatch_campaign_calls_task,
     play_campaign_audio_task,
+    process_call_log_export_task,
     process_contact_import_task,
+    schedule_call_log_export_file_cleanup,
 )
 
 
@@ -78,52 +92,16 @@ class ContactImportFailurePagination(PageNumberPagination):
     max_page_size = 200
 
 
-CALL_STATUS_SUCCESS = "success"
-CALL_STATUS_INVALID_NUMBER = "invalid_number"
-CALL_STATUS_NOT_ANSWERED = "not_answered"
-CALL_STATUS_OTHER = "other"
-
-SUCCESS_REASONS = [
-    "Answer Leg Disconnected Via Call Control API",
-    "BYE Received",
-]
-INVALID_NUMBER_REASONS = ["Relayed Response: Auth Failed", "Auth Failed"]
-
 ACTIVE_CONTACT_IMPORT_STATUSES = [
     ContactImportJob.Status.PENDING,
     ContactImportJob.Status.PREPARING,
     ContactImportJob.Status.PROCESSING,
 ]
-
-
-def build_derived_status_expression() -> Case:
-    return Case(
-        When(
-            Q(reason__in=SUCCESS_REASONS) & Q(reason_code=487) & Q(duration__gt=0),
-            then=Value(CALL_STATUS_SUCCESS),
-        ),
-        When(
-            Q(reason="Temporarily Unavailable") & Q(reason_code=480) & Q(duration=0),
-            then=Value(CALL_STATUS_NOT_ANSWERED),
-        ),
-        When(
-            Q(reason__in=INVALID_NUMBER_REASONS) & Q(reason_code=403) & Q(duration=0),
-            then=Value(CALL_STATUS_INVALID_NUMBER),
-        ),
-        default=Value(CALL_STATUS_OTHER),
-        output_field=CharField(),
-    )
-
-
-def collect_latest_contact_statuses(call_logs: Iterable[CallLog]) -> dict[str, str]:
-    latest_statuses: dict[str, str] = {}
-    for call_log in call_logs:
-        if call_log.contact_id is None or call_log.contact_id in latest_statuses:
-            continue
-        latest_statuses[call_log.contact_id] = getattr(
-            call_log, "derived_status", CALL_STATUS_OTHER
-        )
-    return latest_statuses
+ACTIVE_CALL_LOG_EXPORT_STATUSES = [
+    CallLogExportJob.Status.PENDING,
+    CallLogExportJob.Status.PREPARING,
+    CallLogExportJob.Status.PROCESSING,
+]
 
 
 class ExternalSessionMixin:
@@ -558,6 +536,157 @@ class CancelContactImportJobView(ExternalSessionMixin, APIView):
         return Response(
             ContactImportJobSerializer(job).data, status=status.HTTP_202_ACCEPTED
         )
+
+
+class CampaignCallLogExportView(ExternalSessionMixin, APIView):
+    def get_campaign(self, campaign_id: UUID) -> Campaign:
+        campaign = Campaign.objects.filter(
+            owner=self.get_profile(), pk=campaign_id
+        ).first()
+        if campaign is None:
+            raise ValidationError({"detail": "Campaign not found."})
+        return campaign
+
+    def get(self, request, campaign_id: UUID):
+        campaign = self.get_campaign(campaign_id)
+        profile = self.get_profile()
+        now = timezone.now()
+
+        job = (
+            CallLogExportJob.objects.select_related("campaign")
+            .filter(
+                owner=profile,
+                campaign=campaign,
+                status__in=ACTIVE_CALL_LOG_EXPORT_STATUSES,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if job is None:
+            job = (
+                CallLogExportJob.objects.select_related("campaign")
+                .filter(
+                    owner=profile,
+                    campaign=campaign,
+                    status=CallLogExportJob.Status.COMPLETED,
+                    expires_at__isnull=False,
+                    expires_at__gt=now,
+                )
+                .exclude(export_file="")
+                .order_by("-created_at")
+                .first()
+            )
+
+        return Response({"job": CallLogExportJobSerializer(job).data if job else None})
+
+    def post(self, request, campaign_id: UUID):
+        campaign = self.get_campaign(campaign_id)
+        profile = self.get_profile()
+
+        if campaign.status not in [
+            Campaign.CampaignStatus.PAUSED,
+            Campaign.CampaignStatus.FINISHED,
+        ]:
+            raise ValidationError(
+                {"detail": "Pause or finish the campaign before exporting call logs."}
+            )
+
+        active_job = (
+            CallLogExportJob.objects.select_related("campaign")
+            .filter(
+                owner=profile,
+                campaign=campaign,
+                status__in=ACTIVE_CALL_LOG_EXPORT_STATUSES,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if active_job is not None:
+            return Response(
+                {
+                    "detail": "A call log export is already running for this campaign.",
+                    "job": CallLogExportJobSerializer(active_job).data,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        job = CallLogExportJob.objects.create(
+            owner=profile,
+            campaign=campaign,
+            original_filename=build_call_log_export_filename(campaign, timezone.now()),
+        )
+        process_call_log_export_task.delay(str(job.id))
+        return Response(
+            CallLogExportJobSerializer(job).data,
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class CallLogExportJobDetailView(ExternalSessionMixin, APIView):
+    def get(self, request, job_id: UUID):
+        job = (
+            CallLogExportJob.objects.select_related("campaign")
+            .filter(owner=self.get_profile(), pk=job_id)
+            .first()
+        )
+        if job is None:
+            raise ValidationError({"detail": "Export job not found."})
+        return Response(CallLogExportJobSerializer(job).data)
+
+
+class CancelCallLogExportJobView(ExternalSessionMixin, APIView):
+    def post(self, request, job_id: UUID):
+        job = CallLogExportJob.objects.filter(
+            owner=self.get_profile(), pk=job_id
+        ).first()
+        if job is None:
+            raise ValidationError({"detail": "Export job not found."})
+        if job.status in [
+            CallLogExportJob.Status.COMPLETED,
+            CallLogExportJob.Status.FAILED,
+            CallLogExportJob.Status.CANCELED,
+        ]:
+            raise ValidationError(
+                {"detail": f"Cannot cancel a job in '{job.status}' status."}
+            )
+
+        job.cancel_requested = True
+        job.save(update_fields=["cancel_requested", "updated_at"])
+        return Response(
+            CallLogExportJobSerializer(job).data,
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class DownloadCallLogExportJobView(ExternalSessionMixin, APIView):
+    def get(self, request, job_id: UUID):
+        job = (
+            CallLogExportJob.objects.select_related("campaign")
+            .filter(owner=self.get_profile(), pk=job_id)
+            .first()
+        )
+        if job is None:
+            raise ValidationError({"detail": "Export job not found."})
+        if job.status != CallLogExportJob.Status.COMPLETED or not job.export_file:
+            raise ValidationError({"detail": "Export file is not ready yet."})
+
+        now = timezone.now()
+        if job.expires_at is not None and job.expires_at <= now:
+            cleanup_call_log_export_file_task(str(job.id))
+            raise Http404("Export file expired.")
+
+        if job.first_downloaded_at is None:
+            job.first_downloaded_at = now
+            job.expires_at = now + timedelta(hours=1)
+            job.save(update_fields=["first_downloaded_at", "expires_at", "updated_at"])
+            schedule_call_log_export_file_cleanup(str(job.id), 3600)
+
+        job.export_file.open("rb")
+        response = FileResponse(job.export_file, content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="{job.original_filename or "call-logs.csv"}"'
+        )
+        return response
 
 
 class CampaignCallLogView(

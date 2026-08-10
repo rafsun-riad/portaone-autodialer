@@ -6,6 +6,9 @@ type DialogProps = {
   children: React.ReactNode;
   footer?: React.ReactNode;
   widthClassName?: string;
+  dismissible?: boolean;
+  showCloseButton?: boolean;
+  closeOnBackdrop?: boolean;
 };
 
 export function Dialog({
@@ -16,6 +19,9 @@ export function Dialog({
   children,
   footer,
   widthClassName = "max-w-3xl",
+  dismissible = true,
+  showCloseButton = true,
+  closeOnBackdrop = true,
 }: DialogProps) {
   if (!open) {
     return null;
@@ -24,7 +30,7 @@ export function Dialog({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6"
-      onClick={onClose}
+      onClick={closeOnBackdrop && dismissible ? onClose : undefined}
     >
       <div
         aria-modal="true"
@@ -41,13 +47,16 @@ export function Dialog({
               </p>
             ) : null}
           </div>
-          <button
-            className="rounded-full border border-slate-200 px-3 py-1 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-950"
-            onClick={onClose}
-            type="button"
-          >
-            Close
-          </button>
+          {showCloseButton ? (
+            <button
+              className="rounded-full border border-slate-200 px-3 py-1 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={onClose}
+              type="button"
+              disabled={!dismissible}
+            >
+              Close
+            </button>
+          ) : null}
         </div>
         <div className="mt-6">{children}</div>
         {footer ? (
