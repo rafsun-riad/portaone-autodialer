@@ -179,6 +179,33 @@ function formatDuration(seconds: number) {
   return parts.join(" ");
 }
 
+function formatRemainingTime(expiresAt: string | null, nowMs: number) {
+  if (!expiresAt) {
+    return null;
+  }
+
+  const expiresAtMs = new Date(expiresAt).getTime();
+  if (Number.isNaN(expiresAtMs)) {
+    return null;
+  }
+
+  const totalSeconds = Math.max(0, Math.floor((expiresAtMs - nowMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+
+  if (hours) {
+    parts.push(`${hours}h`);
+  }
+  if (minutes || hours) {
+    parts.push(`${minutes}m`);
+  }
+  parts.push(`${seconds}s`);
+
+  return parts.join(" ");
+}
+
 function statusTone(status: CampaignCallLog["derived_status"]) {
   if (status === "success") {
     return "bg-emerald-50 text-emerald-700 border-emerald-200";
@@ -243,6 +270,7 @@ export function CampaignCallLogsPageClient() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportBlockedOpen, setExportBlockedOpen] = useState(false);
   const [isDownloadingExport, setIsDownloadingExport] = useState(false);
+  const [countdownNowMs, setCountdownNowMs] = useState(() => Date.now());
   const deferredSearch = useDeferredValue(search);
 
   const restartForm = useForm<RestartValues>({
@@ -502,8 +530,26 @@ export function CampaignCallLogsPageClient() {
   const exportExpiryLabel = currentExportJob?.expires_at
     ? formatDhakaDateTime(currentExportJob.expires_at)
     : null;
+  const exportRetentionCountdown = formatRemainingTime(
+    currentExportJob?.expires_at ?? null,
+    countdownNowMs,
+  );
   const exportModalOpen =
     exportOpen || Boolean(currentExportJob && !exportIsTerminal);
+
+  useEffect(() => {
+    if (!exportModalOpen || !currentExportJob?.expires_at) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setCountdownNowMs(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [currentExportJob?.expires_at, exportModalOpen]);
 
   useEffect(() => {
     if (!exportIsRunning) {
@@ -1348,6 +1394,11 @@ export function CampaignCallLogsPageClient() {
                   <p className="mt-3 text-base font-semibold text-slate-950">
                     {exportExpiryLabel || "Starts after completion"}
                   </p>
+                  {exportRetentionCountdown ? (
+                    <p className="mt-1 text-sm text-slate-500">
+                      Deletes in {exportRetentionCountdown}
+                    </p>
+                  ) : null}
                 </div>
               </div>
 
