@@ -1,13 +1,14 @@
 import { fetchBackendJson } from "@/lib/server-api";
 import { formatDhakaDateTime } from "@/lib/time";
 import {
-  Activity,
   ChartColumnBig,
   Clock3,
   Radio,
   ShieldCheck,
   Wallet,
 } from "lucide-react";
+
+import { DashboardOverviewCharts } from "@/components/dashboard/dashboard-overview-charts";
 
 type MeResponse = {
   username: string;
@@ -132,60 +133,7 @@ export default async function DashboardPage() {
       </section>
 
       <section>
-        <div className="dashboard-panel overflow-hidden p-6">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="section-heading">Overview</p>
-              <h3 className="mt-2 text-2xl font-semibold text-slate-950">
-                Campaign telemetry will live here next.
-              </h3>
-            </div>
-            <div className="rounded-full bg-[linear-gradient(135deg,rgba(251,113,133,0.12),rgba(249,115,22,0.14))] px-4 py-2 text-sm font-medium text-rose-600">
-              Placeholder analytics
-            </div>
-          </div>
-
-          <div className="mt-6 rounded-[2rem] border border-slate-200 bg-[linear-gradient(180deg,#ffffff,#f7f8fc)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)]">
-            <div className="grid h-72.5 gap-4 rounded-[1.6rem] bg-[linear-gradient(180deg,rgba(244,247,252,0.6),rgba(255,255,255,0.96))] p-5">
-              <div className="flex items-center justify-between">
-                <p className="text-base font-semibold text-slate-700">
-                  Live performance canvas
-                </p>
-                <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
-                  <Activity className="size-4" />
-                  Awaiting campaign activity
-                </div>
-              </div>
-
-              <div className="relative overflow-hidden rounded-[1.4rem] border border-slate-200 bg-white px-4 py-5">
-                <div className="absolute inset-x-4 top-6 grid gap-8">
-                  <div className="h-px bg-slate-200" />
-                  <div className="h-px bg-slate-200" />
-                  <div className="h-px bg-slate-200" />
-                  <div className="h-px bg-slate-200" />
-                </div>
-                <svg
-                  className="relative z-10 h-full w-full"
-                  viewBox="0 0 700 240"
-                  fill="none"
-                  preserveAspectRatio="none"
-                >
-                  <defs>
-                    <linearGradient id="dash-fill" x1="0" x2="1" y1="0" y2="1">
-                      <stop offset="0%" stopColor="#f43f5e" />
-                      <stop offset="100%" stopColor="#fb923c" />
-                    </linearGradient>
-                  </defs>
-                  <path
-                    d="M0 220C60 160 120 118 180 124C240 130 300 168 360 124C420 80 480 18 540 28C600 38 650 174 700 146V240H0Z"
-                    fill="url(#dash-fill)"
-                    fillOpacity="0.95"
-                  />
-                </svg>
-              </div>
-            </div>
-          </div>
-        </div>
+        <DashboardOverviewCharts />
       </section>
     </div>
   );

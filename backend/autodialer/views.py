@@ -5,7 +5,8 @@ import io
 from datetime import timedelta
 from uuid import UUID
 
-from django.db.models import Q
+from django.db.models import Count, DateTimeField, Max, Min, Q
+from django.db.models.functions import Coalesce, TruncDay, TruncHour
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -797,6 +798,145 @@ class CampaignCallLogView(
             return paginated
 
         return Response({"results": serializer.data, "summary": summary})
+
+
+class CampaignCallLogAnalyticsView(ExternalSessionMixin, APIView):
+    def get_campaign(self, campaign_id: UUID) -> Campaign:
+        campaign = Campaign.objects.filter(
+            owner=self.get_profile(), pk=campaign_id
+        ).first()
+        if campaign is None:
+            raise ValidationError({"detail": "Campaign not found."})
+        return campaign
+
+    def get_queryset(self, campaign: Campaign):
+        return CallLog.objects.filter(
+            owner=self.get_profile(), campaign=campaign
+        ).annotate(
+            derived_status=build_derived_status_expression(),
+            call_time=Coalesce(
+                "connect_time",
+                "start_time",
+                "created_at",
+                output_field=DateTimeField(),
+            ),
+        )
+
+    def get(self, request, campaign_id: UUID):
+        campaign = self.get_campaign(campaign_id)
+        queryset = self.get_queryset(campaign)
+
+        current_status = request.query_params.get("current_status", "").strip()
+        derived_status = request.query_params.get("derived_status", "").strip()
+        bucket = request.query_params.get("bucket", "auto").strip() or "auto"
+
+        if current_status:
+            queryset = queryset.filter(status=current_status)
+        if derived_status:
+            queryset = queryset.filter(derived_status=derived_status)
+        if bucket not in {"auto", "hour", "day"}:
+            raise ValidationError(
+                {"bucket": "Bucket must be one of auto, hour, or day."}
+            )
+
+        if bucket == "auto":
+            bounds = queryset.aggregate(
+                first_call=Min("call_time"), last_call=Max("call_time")
+            )
+            first_call = bounds["first_call"]
+            last_call = bounds["last_call"]
+            if (
+                first_call is not None
+                and last_call is not None
+                and last_call - first_call >= timedelta(days=3)
+            ):
+                bucket = "day"
+            else:
+                bucket = "hour"
+
+        bucket_expression = (
+            TruncDay("call_time") if bucket == "day" else TruncHour("call_time")
+        )
+        timeline_queryset = (
+            queryset.exclude(call_time__isnull=True)
+            .annotate(bucket=bucket_expression)
+            .values("bucket")
+            .annotate(
+                success=Count("id", filter=Q(derived_status=CALL_STATUS_SUCCESS)),
+                invalid_number=Count(
+                    "id", filter=Q(derived_status=CALL_STATUS_INVALID_NUMBER)
+                ),
+                not_answered=Count(
+                    "id", filter=Q(derived_status=CALL_STATUS_NOT_ANSWERED)
+                ),
+                ongoing=Count("id", filter=Q(status__in=ACTIVE_CALL_STATES)),
+            )
+            .order_by("bucket")
+        )
+
+        classified_total = queryset.exclude(derived_status=CALL_STATUS_OTHER).count()
+        success_count = queryset.filter(derived_status=CALL_STATUS_SUCCESS).count()
+        invalid_number_count = queryset.filter(
+            derived_status=CALL_STATUS_INVALID_NUMBER
+        ).count()
+        not_answered_count = queryset.filter(
+            derived_status=CALL_STATUS_NOT_ANSWERED
+        ).count()
+
+        if classified_total:
+            success_rate = round(success_count / classified_total * 100, 2)
+            invalid_number_rate = round(
+                invalid_number_count / classified_total * 100, 2
+            )
+            not_answered_rate = round(not_answered_count / classified_total * 100, 2)
+        else:
+            success_rate = 0.0
+            invalid_number_rate = 0.0
+            not_answered_rate = 0.0
+
+        return Response(
+            {
+                "campaign": {
+                    "id": str(campaign.id),
+                    "name": campaign.name,
+                    "status": campaign.status,
+                    "started_at": campaign.started_at,
+                    "finished_at": campaign.finished_at,
+                },
+                "filters": {
+                    "current_status": current_status,
+                    "derived_status": derived_status,
+                    "bucket": bucket,
+                },
+                "summary": {
+                    "counts": {
+                        "total_calls": queryset.count(),
+                        "ongoing_calls": queryset.filter(
+                            status__in=ACTIVE_CALL_STATES
+                        ).count(),
+                        "classified_calls": classified_total,
+                        "success_calls": success_count,
+                        "invalid_number_calls": invalid_number_count,
+                        "not_answered_calls": not_answered_count,
+                    },
+                    "rates": {
+                        "success_rate": success_rate,
+                        "invalid_number_rate": invalid_number_rate,
+                        "not_answered_rate": not_answered_rate,
+                    },
+                },
+                "timeline": [
+                    {
+                        "bucket": item["bucket"],
+                        "success": item["success"],
+                        "invalid_number": item["invalid_number"],
+                        "not_answered": item["not_answered"],
+                        "ongoing": item["ongoing"],
+                    }
+                    for item in timeline_queryset
+                ],
+            }
+        )
 
 
 class CampaignRestartView(ExternalSessionMixin, APIView):

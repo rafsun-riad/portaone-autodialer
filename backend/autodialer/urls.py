@@ -9,6 +9,7 @@ from autodialer.views import (
     CallStateWebhookView,
     CampaignActionView,
     CampaignAudioView,
+    CampaignCallLogAnalyticsView,
     CampaignCallLogExportView,
     CampaignCallLogView,
     CampaignRestartView,
@@ -78,6 +79,11 @@ urlpatterns = [
     ),
     path(
         "campaigns/<uuid:campaign_id>/calls/", campaign_call_logs, name="campaign-calls"
+    ),
+    path(
+        "campaigns/<uuid:campaign_id>/calls/analytics/",
+        CampaignCallLogAnalyticsView.as_view(),
+        name="campaign-call-analytics",
     ),
     path(
         "campaigns/<uuid:campaign_id>/calls/export/",

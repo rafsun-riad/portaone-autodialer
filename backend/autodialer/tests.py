@@ -106,6 +106,20 @@ class CampaignCallLogViewTests(TestCase):
             reason_code=403,
             duration=0,
         )
+        CallLog.objects.create(
+            owner=self.profile,
+            campaign=self.campaign,
+            contact=self.success_contact,
+            external_call_id="call-ongoing",
+            status="ringing",
+            account_id="1001",
+            caller_id="8801700000000",
+            destination="8801700000004",
+            reason="",
+            reason_code=None,
+            duration=0,
+            start_time=timezone.now() + timedelta(minutes=5),
+        )
 
     def authenticate(self):
         self.client.credentials(
@@ -126,9 +140,10 @@ class CampaignCallLogViewTests(TestCase):
         self.assertEqual(
             response.data["results"][0]["campaign_name"], self.campaign.name
         )
-        self.assertIn(
-            response.data["results"][0]["derived_status"],
-            ["success", "invalid_number", "not_answered"],
+        self.assertTrue(
+            {item["derived_status"] for item in response.data["results"]}.issuperset(
+                {"success", "invalid_number", "not_answered", "other"}
+            )
         )
 
     def test_restart_can_schedule_only_not_answered_contacts(self):
@@ -157,6 +172,41 @@ class CampaignCallLogViewTests(TestCase):
         self.assertEqual(self.not_answered_contact.status, Contact.ContactStatus.NEW)
         self.assertEqual(self.success_contact.status, Contact.ContactStatus.PAUSED)
         self.assertEqual(self.invalid_contact.status, Contact.ContactStatus.INVALID)
+
+    def test_analytics_returns_timeline_and_summary(self):
+        self.authenticate()
+
+        response = self.client.get(
+            f"/api/campaigns/{self.campaign.id}/calls/analytics/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["summary"]["counts"]["total_calls"], 4)
+        self.assertEqual(response.data["summary"]["counts"]["ongoing_calls"], 1)
+        self.assertEqual(response.data["summary"]["counts"]["success_calls"], 1)
+        self.assertEqual(response.data["summary"]["counts"]["invalid_number_calls"], 1)
+        self.assertEqual(response.data["summary"]["counts"]["not_answered_calls"], 1)
+        self.assertEqual(response.data["summary"]["rates"]["success_rate"], 33.33)
+        self.assertEqual(len(response.data["timeline"]), 1)
+        self.assertEqual(response.data["timeline"][0]["success"], 1)
+        self.assertEqual(response.data["timeline"][0]["invalid_number"], 1)
+        self.assertEqual(response.data["timeline"][0]["not_answered"], 1)
+        self.assertEqual(response.data["timeline"][0]["ongoing"], 1)
+
+    def test_analytics_respects_filters_and_start_time_fallback(self):
+        self.authenticate()
+
+        response = self.client.get(
+            f"/api/campaigns/{self.campaign.id}/calls/analytics/?current_status=ringing"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["summary"]["counts"]["total_calls"], 1)
+        self.assertEqual(response.data["summary"]["counts"]["ongoing_calls"], 1)
+        self.assertEqual(response.data["summary"]["counts"]["classified_calls"], 0)
+        self.assertEqual(len(response.data["timeline"]), 1)
+        self.assertEqual(response.data["timeline"][0]["ongoing"], 1)
+        self.assertEqual(response.data["timeline"][0]["success"], 0)
 
 
 class ContactImportJobTests(TestCase):
